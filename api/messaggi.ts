@@ -7,7 +7,8 @@
 import { database, chiEntra, saloneDi } from './_firebase';
 import { TipoMessaggio, mandaSms, Messaggio } from './_messaggi';
 import { mandaPerAppuntamento, registra, schedaSalone } from './_invio';
-import { funzioneAccesa } from '../salone-app/frontend/lib/funzioni';
+import { smsDelSalone, contoDelSalone, salvaConto, togliConto, nascondi } from './_conto-sms';
+import { statoSkebby } from './_skebby';
 import { haConsensoMarketing, testoPer, erroreTesto, TESTO_RECUPERO } from '../salone-app/frontend/lib/recupero';
 
 interface Richiesta {
@@ -44,14 +45,14 @@ export default async function handler(req: Richiesta, res: Risposta) {
   }
 
   try {
-    const { appuntamentoId, tipo, azione, telefono, clienteId, testo: testoScelto } = corpo(req);
+    const { appuntamentoId, tipo, azione, telefono, clienteId, testo: testoScelto, utente, password, mittente } = corpo(req);
     // Dal gestionale si mandano a mano solo questi: la ricevuta parte dal
     // server quando la cliente prenota, i promemoria li manda il giro
     // automatico.
     const AMMESSI: TipoMessaggio[] = ['conferma', 'rifiuto', 'spostamento', 'promemoria'];
     const quale: TipoMessaggio = AMMESSI.includes(tipo) ? tipo : 'conferma';
 
-    if (azione !== 'prova' && azione !== 'recupero' && (!appuntamentoId || typeof appuntamentoId !== 'string')) {
+    if (azione !== 'prova' && azione !== 'recupero' && !String(azione || '').startsWith('sms_') && (!appuntamentoId || typeof appuntamentoId !== 'string')) {
       res.status(400).json({ errore: "Manca il numero dell'appuntamento." });
       return;
     }
@@ -72,13 +73,65 @@ export default async function handler(req: Richiesta, res: Risposta) {
     const db = database();
     const salone = await saloneDi(chi.uid);
 
+    // Il conto SMS del salone (pagina Automazioni): vedere com'è messo,
+    // collegarlo, toglierlo. Utente e password non tornano mai al browser.
+    if (azione === 'sms_stato') {
+      const scheda = await schedaSalone(db, salone);
+      const postino = await smsDelSalone(db, salone, scheda.ownerEmail);
+      const conto = await contoDelSalone(db, salone);
+      const stato = conto ? await statoSkebby(conto) : null;
+      res.status(200).json({
+        attivi: postino.attivi,
+        motivo: postino.motivo || '',
+        collegato: !!conto,
+        utente: conto ? nascondi(conto.utente) : '',
+        mittente: conto?.mittente || '',
+        crediti: stato?.crediti ?? null,
+        problema: stato && !stato.ok ? stato.motivo : ''
+      });
+      return;
+    }
+    if (azione === 'sms_collega' || azione === 'sms_scollega') {
+      if (chi.uid !== salone) {
+        res.status(403).json({ errore: 'Il conto SMS lo collega la titolare.' });
+        return;
+      }
+      if (azione === 'sms_scollega') {
+        await togliConto(db, salone);
+        res.status(200).json({ fatto: true });
+        return;
+      }
+      const conto = { utente: String(utente || '').trim(), password: String(password || ''), mittente: String(mittente || '').trim() };
+      if (!conto.utente || !conto.password) {
+        res.status(400).json({ errore: 'Scrivi utente e password del conto Skebby.' });
+        return;
+      }
+      const stato = await statoSkebby(conto);
+      if (!stato.ok) {
+        res.status(400).json({ errore: stato.motivo || 'Skebby non ha accettato utente e password.' });
+        return;
+      }
+      try {
+        await salvaConto(db, salone, conto);
+      } catch (err: any) {
+        if (err?.message === 'segreto-mancante') {
+          res.status(503).json({ errore: 'Il server non può ancora custodire le password: manca SEGRETO_CONTI_SMS su Vercel.' });
+          return;
+        }
+        throw err;
+      }
+      res.status(200).json({ fatto: true, crediti: stato.crediti ?? null });
+      return;
+    }
+
     // Recupero di una cliente che non passa da un po' (pagina Rosy). È un
     // messaggio promozionale: parte solo se la cliente è di questo salone e
     // ha dato il consenso al marketing. Il controllo sta qui, non nel browser.
     if (azione === 'recupero') {
       const scheda = await schedaSalone(db, salone);
-      if (!funzioneAccesa('messaggi_automatici', scheda.ownerEmail)) {
-        res.status(403).json({ errore: 'Gli SMS automatici non sono attivi per questo salone.' });
+      const postino = await smsDelSalone(db, salone, scheda.ownerEmail);
+      if (!postino.attivi) {
+        res.status(403).json({ errore: `Gli SMS non sono attivi: ${postino.motivo}` });
         return;
       }
       if (!clienteId || typeof clienteId !== 'string') {
@@ -102,7 +155,7 @@ export default async function handler(req: Richiesta, res: Risposta) {
         res.status(400).json({ errore: problema });
         return;
       }
-      const esito = await mandaSms(String(cliente.telefono || ''), { oggetto: '', testo, html: '', sms: testo } as Messaggio);
+      const esito = await mandaSms(String(cliente.telefono || ''), { oggetto: '', testo, html: '', sms: testo } as Messaggio, postino.conto);
       await registra(db, {
         userId: salone, tipo: 'recupero', cliente: `${cliente.nome || ''} ${cliente.cognome || ''}`.trim(),
         a: esito.mandato ? esito.a : String(cliente.telefono || ''),
@@ -117,13 +170,14 @@ export default async function handler(req: Richiesta, res: Risposta) {
     // vedere subito se il tablet risponde. Finisce anche lui nel registro.
     if (azione === 'prova') {
       const scheda = await schedaSalone(db, salone);
-      if (!funzioneAccesa('messaggi_automatici', scheda.ownerEmail)) {
-        res.status(403).json({ errore: 'Gli SMS automatici non sono attivi per questo salone.' });
+      const postino = await smsDelSalone(db, salone, scheda.ownerEmail);
+      if (!postino.attivi) {
+        res.status(403).json({ errore: `Gli SMS non sono attivi: ${postino.motivo}` });
         return;
       }
       const nome = (scheda.dettagli?.nomeSalone || 'Il salone').trim();
       const testo = `${nome}: SMS di prova dal gestionale. Se lo leggi, il tablet degli SMS funziona.`;
-      const esito = await mandaSms(String(telefono || ''), { oggetto: '', testo, html: '', sms: testo } as Messaggio);
+      const esito = await mandaSms(String(telefono || ''), { oggetto: '', testo, html: '', sms: testo } as Messaggio, postino.conto);
       await registra(db, {
         userId: salone, tipo: 'prova', cliente: 'Prova', a: esito.mandato ? esito.a : String(telefono || ''),
         testo, esito: esito.mandato ? 'consegnato' : 'errore',

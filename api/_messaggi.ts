@@ -8,7 +8,7 @@
 import { Messaggio } from '../salone-app/frontend/lib/messaggi';
 import { numeroInternazionale } from '../salone-app/frontend/lib/contatti';
 import { segmentiSms } from '../salone-app/frontend/lib/messaggi';
-import { mandaConSkebby } from './_skebby';
+import { mandaConSkebby, ContoSkebby } from './_skebby';
 
 export { componi, quandoScritto, elencoScritto } from '../salone-app/frontend/lib/messaggi';
 export type { TipoMessaggio, DatiMessaggio, Messaggio } from '../salone-app/frontend/lib/messaggi';
@@ -156,8 +156,13 @@ export async function conRiprova(
 
 const dopoTentativi = (n: number) => (n > 1 ? ` (dopo ${n} tentativi)` : '');
 
-export async function mandaSms(telefono: string, messaggio: Messaggio): Promise<EsitoInvio> {
-  const postino = postinoSms();
+/**
+ * `conto`: il conto Skebby del salone, se l'ha collegato — allora l'SMS parte
+ * da lì e lo paga lui. Senza, si usa il postino scritto nelle variabili del
+ * server (se c'è).
+ */
+export async function mandaSms(telefono: string, messaggio: Messaggio, contoSalone?: ContoSkebby | null): Promise<EsitoInvio> {
+  const postino = contoSalone ? 'skebby' : postinoSms();
   if (!postino) {
     return { mandato: false, canale: 'sms', motivo: "l'SMS non è ancora acceso (mancano le chiavi su Vercel)." };
   }
@@ -174,7 +179,13 @@ export async function mandaSms(telefono: string, messaggio: Messaggio): Promise<
   }
 
   if (postino === 'skebby') {
-    const esito = await mandaConSkebby(`+${numero}`, testo);
+    let esito;
+    try {
+      esito = await mandaConSkebby(`+${numero}`, testo, contoSalone);
+    } catch (err: any) {
+      // Utente o password non più validi, o Skebby irraggiungibile.
+      return { mandato: false, canale: 'sms', motivo: `il conto SMS non risponde: ${err?.message || 'motivo sconosciuto'}` };
+    }
     return esito.mandato
       ? { mandato: true, canale: 'sms', a: `+${numero}` }
       : { mandato: false, canale: 'sms', motivo: esito.motivo || 'Skebby non ha mandato il messaggio.' };
