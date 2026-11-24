@@ -1,0 +1,1191 @@
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, serverTimestamp, onSnapshot, deleteField, increment, writeBatch } from 'firebase/firestore';
+import { aData } from './tempo';
+import { idSalone } from './sessione';
+import { costruisciVetrina, disponibilitaPerAppuntamento, Vetrina, Disponibilita } from './vetrina';
+import { chiaviCliente } from './importa';
+import { ordinaOperatori } from './operatori';
+import { unisciConsensi } from './privacy';
+import { TipoMovimento, variazione, incassoProdotti } from './prodotti';
+import { meseDi } from './consumi-ia';
+import { stimaPerMese, stimaPerOperatrice } from './riepilogo';
+import { db, auth } from '../../../src/lib/firebase';
+
+/**
+ * L'identificativo con cui sono marcati i dati: NON è chi è entrato, è il
+ * salone. Il titolare e le operatrici che ci lavorano vedono le stesse cose.
+ * Se la sessione non è ancora aperta si ripiega su chi è entrato, che per il
+ * titolare è la stessa cosa.
+ */
+const getUserId = () => {
+  const id = idSalone() || auth.currentUser?.uid;
+  if (!id) throw new Error('Utente non autenticato');
+  return id;
+};
+
+// ---------------------------------------------------------
+// REFACTORING: DIRECT FIRESTORE CRUD IN REPLACEMENT OF EXPRESS /API
+// ---------------------------------------------------------
+
+
+const chiaveMese = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+
+/** Solo gli appuntamenti fra due giorni (compresi), in ora locale. */
+function soloFraIGiorni(items: any[], daGiorno: string, aGiorno: string): any[] {
+  const inizio = new Date(`${daGiorno}T00:00:00`).getTime();
+  const fine = new Date(`${aGiorno}T23:59:59.999`).getTime();
+  return items.filter((app: any) => {
+    const t = new Date(app.data_ora).getTime();
+    return t >= inizio && t <= fine;
+  });
+}
+
+export const reportApi = {
+  /**
+   * Numeri veri, calcolati sugli appuntamenti completati.
+   * Prima questa funzione restituiva zeri scritti nel codice.
+   */
+  getOverview: async () => {
+    const uid = getUserId();
+
+    // Solo gli ultimi 6 mesi (quelli del grafico): prima si scaricava ogni
+    // appuntamento dalla nascita del salone a ogni apertura del report.
+    // Le clienti arrivano dalla rubrica già in memoria.
+    const giorno = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const oggiQui = new Date();
+    const inizioPeriodo = new Date(oggiQui.getFullYear(), oggiQui.getMonth() - 5, 1);
+    // Si arriva fino alla fine del mese (e almeno a una settimana da oggi):
+    // servono per "domani", per la settimana e per il previsto del mese.
+    // Gli appuntamenti futuri non sono chiusi, quindi i conti qui sotto,
+    // che guardano solo i completati, non cambiano.
+    const fineMese = new Date(oggiQui.getFullYear(), oggiQui.getMonth() + 1, 0);
+    const fraUnaSettimana = new Date(oggiQui.getFullYear(), oggiQui.getMonth(), oggiQui.getDate() + 7);
+    const finePeriodo = fineMese > fraUnaSettimana ? fineMese : fraUnaSettimana;
+    const [appuntamenti, clienti, dipSnap, catalogo] = await Promise.all([
+      appuntamentiApi.getAgenda(undefined, giorno(inizioPeriodo), giorno(finePeriodo)),
+      clientiApi.getAll(),
+      getDocs(query(collection(db, 'dipendenti'), where('userId', '==', uid))),
+      // Il listino serve solo per le stime: se non si legge, il report
+      // funziona lo stesso con i prezzi che gli appuntamenti si portano dietro.
+      catalogoApi.getAll().catch(() => [] as any[])
+    ]) as [any[], any[], any, any[]];
+
+    const dipendenti = dipSnap.docs.map((d: any) => ({ id: d.id, ...d.data() })) as any[];
+
+    const completati = appuntamenti.filter(a => a.stato === 'completato');
+    const incassoDi = (a: any) => Number(a.prezzo_finale) || 0;
+
+    // --- incassi degli ultimi 6 mesi ---
+    const adesso = new Date();
+    const mesi: { mese: string; totale_incassato: number }[] = [];
+    for (let i = 0; i < 6; i++) {
+      const d = new Date(adesso.getFullYear(), adesso.getMonth() - i, 1);
+      mesi.push({ mese: d.toISOString(), totale_incassato: 0 });
+    }
+    const indicePerMese = new Map(mesi.map((m, i) => [chiaveMese(new Date(m.mese)), i]));
+
+    completati.forEach(a => {
+      const d = aData(a.data_ora);
+      if (!d) return;
+      const i = indicePerMese.get(chiaveMese(d));
+      if (i !== undefined) mesi[i].totale_incassato += incassoDi(a);
+    });
+
+    // --- totali per operatore ---
+    const perOperatore = new Map<string, { id: string; nome: string; cognome: string; numero_appuntamenti: number; totale_incassato: number }>();
+    dipendenti.forEach(d => perOperatore.set(d.id, {
+      id: d.id, nome: d.nome || '', cognome: d.cognome || '',
+      numero_appuntamenti: 0, totale_incassato: 0
+    }));
+
+    completati.forEach(a => {
+      const id = a.id_dipendente || a.dipendenti?.id || 'unassigned';
+      if (!perOperatore.has(id)) {
+        perOperatore.set(id, {
+          id,
+          nome: a.dipendenti?.nome || 'Non assegnato',
+          cognome: a.dipendenti?.cognome || '',
+          numero_appuntamenti: 0,
+          totale_incassato: 0
+        });
+      }
+      const riga = perOperatore.get(id)!;
+      riga.numero_appuntamenti += 1;
+      riga.totale_incassato += incassoDi(a);
+    });
+
+    // Gli appuntamenti passati ma mai chiusi con il conto: valgono il listino,
+    // come stima. Stanno in colonne a parte, l'incassato vero non si tocca.
+    const stimeOperatrici = stimaPerOperatrice(appuntamenti, catalogo, adesso);
+    Object.keys(stimeOperatrici).forEach(id => {
+      if (perOperatore.has(id)) return;
+      const esempio = appuntamenti.find(a => (a.id_dipendente || a.idDipendente || a.dipendenti?.id || 'unassigned') === id);
+      perOperatore.set(id, {
+        id,
+        nome: esempio?.dipendenti?.nome || 'Non assegnato',
+        cognome: esempio?.dipendenti?.cognome || '',
+        numero_appuntamenti: 0,
+        totale_incassato: 0
+      });
+    });
+    const totaliOperatori = Array.from(perOperatore.values())
+      .map(r => ({
+        ...r,
+        non_chiusi: stimeOperatrici[r.id]?.appuntamenti || 0,
+        stimato: stimeOperatrici[r.id]?.stima || 0
+      }))
+      .filter(r => r.numero_appuntamenti > 0 || r.non_chiusi > 0)
+      .sort((a, b) => (b.totale_incassato + b.stimato) - (a.totale_incassato + a.stimato));
+
+    const stimeMesi = stimaPerMese(appuntamenti, catalogo, adesso);
+    const mesiConStima = mesi.map(m => ({ ...m, stimato: stimeMesi[chiaveMese(new Date(m.mese))] || 0 }));
+
+    // --- clienti acquisiti questo mese e da dove arrivano ---
+    const meseCorrente = chiaveMese(adesso);
+    const acquisiti = clienti
+      .filter(c => {
+        const d = aData(c.createdAt);
+        return d && chiaveMese(d) === meseCorrente;
+      })
+      .map(c => {
+        const d = aData(c.createdAt);
+        return {
+          id: c.id,
+          nome: c.nome || '',
+          cognome: c.cognome || '',
+          telefono: c.telefono || '',
+          email: c.email || '',
+          canale_acquisizione: c.canale_acquisizione || 'Non indicato',
+          data_acquisizione: d ? d.toISOString() : ''
+        };
+      })
+      .sort((a, b) => b.data_acquisizione.localeCompare(a.data_acquisizione));
+
+    const perCanale = new Map<string, number>();
+    clienti.forEach(c => {
+      const canale = c.canale_acquisizione || 'Non indicato';
+      perCanale.set(canale, (perCanale.get(canale) || 0) + 1);
+    });
+    const conteggioCanali = Array.from(perCanale.entries())
+      .map(([canale, quantita]) => ({ canale, quantita }))
+      .sort((a, b) => b.quantita - a.quantita);
+
+    // --- riepilogo in alto ---
+    const incassoMensile = mesi[0].totale_incassato;
+    const oggi = new Date();
+    const appuntamentiOggi = appuntamenti.filter(a => {
+      const d = aData(a.data_ora);
+      return d && d.toDateString() === oggi.toDateString() && a.stato !== 'annullato';
+    }).length;
+    const completatiMese = completati.filter(a => {
+      const d = aData(a.data_ora);
+      return d && chiaveMese(d) === meseCorrente;
+    });
+    const ticketMedio = completatiMese.length
+      ? completatiMese.reduce((acc, a) => acc + incassoDi(a), 0) / completatiMese.length
+      : 0;
+
+    // I prodotti del mese: quelli venduti negli appuntamenti più quelli al
+    // banco. Se il registro non si legge si contano solo gli appuntamenti.
+    const meseQui = meseDi(adesso);
+    const movimentiMese = await prodottiApi.movimentiDelMese(meseQui).catch(() => []);
+    const prodottiMese = incassoProdotti(appuntamenti, movimentiMese, meseQui, iso => meseDi(new Date(iso)));
+    const alBancoMese = movimentiMese
+      .filter((m: any) => m.tipo === 'vendita_banco')
+      .reduce((t: number, m: any) => t + (Number(m.importo) || 0), 0);
+
+    return {
+      overview: {
+        prodotti_mese: prodottiMese,
+        al_banco_mese: Math.round(alBancoMese * 100) / 100,
+        incasso_mensile: incassoMensile,
+        stimato_mese: mesiConStima[0].stimato,
+        appuntamenti_oggi: appuntamentiOggi,
+        ticket_medio: ticketMedio,
+        clienti_totali: clienti.length
+      },
+      incassi: mesiConStima,
+      dipendenti: totaliOperatori,
+      clienti_report: {
+        acquisiti_questo_mese: acquisiti,
+        conteggio_per_canale: conteggioCanali
+      },
+      // Quello che serve alla pagina per il riepilogo di oggi, della
+      // settimana e del mese: i conti li fa `lib/riepilogo`.
+      giornata: {
+        appuntamenti,
+        catalogo,
+        operatrici: dipendenti.map(d => ({ id: d.id, nome: d.nome || '', cognome: d.cognome || '' })),
+        nascite_clienti: clienti.map(c => aData(c.createdAt)?.toISOString() || null).filter(Boolean) as string[]
+      }
+    };
+  },
+};
+
+/**
+ * La rubrica tenuta in memoria per tutta la sessione.
+ *
+ * Prima ogni apertura dell'agenda, della rubrica, di Rosy e ogni conferma di
+ * una prenotazione online riscaricava TUTTE le clienti: con 1.500 schede sono
+ * 1.500 letture ogni volta, e il limite gratuito (50.000 al giorno) finiva
+ * prima di sera. Adesso la rubrica si scarica una volta sola e poi il database
+ * manda solo le schede che cambiano (una lettura ciascuna), anche quando le
+ * cambia un'altra postazione. Le schede create o modificate da qui arrivano
+ * subito, senza ricaricare la pagina.
+ */
+type Rubrica = {
+  uid: string;
+  dati: any[];
+  pronta: Promise<void>;
+  rotta: boolean;
+  smetti: () => void;
+  ascoltatori: Set<(clienti: any[]) => void>;
+};
+let rubrica: Rubrica | null = null;
+
+function avviaRubrica(): Rubrica {
+  const uid = getUserId();
+  if (rubrica && rubrica.uid === uid && !rubrica.rotta) return rubrica;
+  const ascoltatori = rubrica?.uid === uid ? rubrica.ascoltatori : new Set<(clienti: any[]) => void>();
+  rubrica?.smetti();
+
+  let pronta!: () => void, fallita!: (e: any) => void, partita = false;
+  const r: Rubrica = {
+    uid, dati: [], rotta: false, ascoltatori, smetti: () => {},
+    pronta: new Promise<void>((ok, ko) => { pronta = ok; fallita = ko; })
+  };
+  rubrica = r;
+  r.smetti = onSnapshot(
+    query(collection(db, 'clienti'), where('userId', '==', uid)),
+    snap => {
+      r.dati = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (!partita) { partita = true; pronta(); }
+      r.ascoltatori.forEach(f => f(r.dati));
+    },
+    err => {
+      // Quota finita, rete giù: alla prossima richiesta si riprova.
+      console.warn('Rubrica in diretta non disponibile:', err);
+      r.rotta = true;
+      if (!partita) { partita = true; fallita(err); }
+    }
+  );
+  return r;
+}
+
+export const clientiApi = {
+  getAll: async (): Promise<any[]> => {
+    try {
+      const r = avviaRubrica();
+      await r.pronta;
+      return [...r.dati];
+    } catch (err) {
+      const q = query(collection(db, 'clienti'), where('userId', '==', getUserId()));
+      const snap = await getDocs(q);
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+  },
+  /**
+   * La rubrica in diretta: `quandoCambia` riceve l'elenco intero ogni volta
+   * che una scheda cambia. Restituisce la funzione per smettere di ascoltare.
+   * Il collegamento al database resta aperto per gli altri: costa poco.
+   */
+  ascolta: (quandoCambia: (clienti: any[]) => void): (() => void) => {
+    let r: Rubrica;
+    try { r = avviaRubrica(); } catch { return () => {}; }
+    r.ascoltatori.add(quandoCambia);
+    r.pronta.then(() => quandoCambia([...r.dati])).catch(() => {});
+    return () => { r.ascoltatori.delete(quandoCambia); };
+  },
+  getById: async (id: string): Promise<any> => {
+    const d = await getDoc(doc(db, 'clienti', id));
+    if (!d.exists() || d.data().userId !== getUserId()) throw new Error('Not found');
+    return { id: d.id, filter: '', ...d.data() };
+  },
+  create: async (data: any) => {
+    const ref = doc(collection(db, 'clienti'));
+    const payload = { ...data, userId: getUserId(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+    await setDoc(ref, payload);
+    return { id: ref.id, ...payload };
+  },
+  update: async (id: string, data: any) => {
+    const ref = doc(db, 'clienti', id);
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+    return { id, ...data };
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'clienti', id));
+    return { success: true };
+  },
+  importAi: async (data: any) => {
+    throw new Error('Not implemented on frontend yet');
+  },
+
+  /**
+   * La cliente che ha prenotato dal sito diventa una cliente vera.
+   *
+   * Chi prenota online scrive nome e telefono dentro l'appuntamento e basta:
+   * finito lì, non ha una scheda, non ha uno storico, e in rubrica non entra.
+   * Qui si chiude il buco. Si cerca prima se c'è già — stesso numero, o stesso
+   * nome e cognome — e in quel caso si aggancia a quella, invece di fare un
+   * doppione a ogni prenotazione. Se non c'è, si crea.
+   *
+   * Restituisce l'identificativo della cliente, e lo scrive sull'appuntamento
+   * così la scheda e lo storico si tengono per mano da soli.
+   */
+  assicuraDaAppuntamento: async (appuntamento: any): Promise<string | null> => {
+    if (!appuntamento) return null;
+    if (appuntamento.id_cliente) return appuntamento.id_cliente;
+
+    const dati = appuntamento.clienti || {};
+    const nome = (dati.nome || '').trim();
+    const cognome = (dati.cognome || '').trim();
+    if (!nome && !cognome) return null;
+
+    const inArrivo = {
+      nome, cognome,
+      telefono: (dati.telefono || '').trim(),
+      email: (dati.email || '').trim()
+    };
+
+    // Le stesse chiavi dell'importazione da Excel: numero ripulito, nome e
+    // cognome senza maiuscole. Un solo modo di dire "è la stessa persona".
+    const chiaviNuove = chiaviCliente(inArrivo);
+    const esistenti = await clientiApi.getAll();
+    const gia = esistenti.find(c => chiaviCliente(c).some(k => chiaviNuove.includes(k)));
+
+    // La privacy accettata prenotando passa nella scheda della cliente.
+    const consensi = unisciConsensi(gia?.consensi, appuntamento.consensi);
+
+    let clienteId: string;
+    if (gia) {
+      clienteId = gia.id;
+      // Se prenotando ha lasciato un contatto che in scheda mancava, si scrive;
+      // quello che c'è già non si tocca.
+      const daCompletare: any = {};
+      if (!gia.telefono && inArrivo.telefono) daCompletare.telefono = inArrivo.telefono;
+      if (!gia.email && inArrivo.email) daCompletare.email = inArrivo.email;
+      if (consensi) daCompletare.consensi = consensi;
+      if (Object.keys(daCompletare).length) await clientiApi.update(clienteId, daCompletare);
+    } else {
+      const creato = await clientiApi.create({
+        ...inArrivo,
+        note: '',
+        canale_acquisizione: 'Prenotazione online',
+        ...(consensi ? { consensi } : {})
+      });
+      clienteId = creato.id;
+    }
+
+    await updateDoc(doc(db, 'appuntamenti', appuntamento.id), {
+      id_cliente: clienteId,
+      updatedAt: serverTimestamp()
+    });
+
+    return clienteId;
+  }
+};
+
+/**
+ * I messaggi alle clienti passano dal server, non dal browser.
+ *
+ * Non è un capriccio: per mandare un'email serve una chiave, e una chiave
+ * messa nel programma se la prende chiunque apra il sito. Il browser si limita
+ * a dire "manda la conferma di questo appuntamento", allegando il tesserino di
+ * chi è entrato; a controllare che l'appuntamento sia davvero di quel salone,
+ * e a mandare, ci pensa il server.
+ */
+/**
+ * Da aggiungere a un aggiornamento quando l'orario cambia: i promemoria già
+ * partiti erano per l'orario vecchio, e devono ripartire per quello nuovo.
+ */
+export const azzeraPromemoria = () => ({
+  'messaggi.promemoria': deleteField(),
+  'messaggi.promemoria_ora': deleteField(),
+  'messaggi_errore.promemoria': deleteField(),
+  'messaggi_errore.promemoria_ora': deleteField()
+});
+
+/**
+ * Rosy, l'assistente: si manda la conversazione, torna la risposta e le
+ * eventuali proposte di appuntamento. Le proposte NON sono salvate: le salva
+ * il gestionale quando si preme "Conferma".
+ */
+export const rosyApi = {
+  /** Il consumo dell'IA degli ultimi mesi, dal più recente: lo conta il server. */
+  consumi: async (): Promise<import('./consumi-ia').ConsumoMese[]> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+    const risposta = await fetch('/api/rosy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ consumi: true })
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok) throw new Error(dati?.errore || `Il server non ha risposto (errore ${risposta.status}).`);
+    return Array.isArray(dati.mesi) ? dati.mesi : [];
+  },
+  /** All'apertura della chat: sveglia il server e fa leggere in anticipo i dati. Se non va, pazienza. */
+  riscalda: async (): Promise<void> => {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) return;
+      await fetch('/api/rosy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ riscalda: true })
+      });
+    } catch { /* la domanda vera ci riproverà */ }
+  },
+  chiedi: async (storia: { ruolo: 'utente' | 'rosy'; testo: string }[]): Promise<{ testo: string; proposte: any[]; schede: { id: string; nome: string }[] }> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+    const risposta = await fetch('/api/rosy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ storia })
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok) {
+      // Senza un errore scritto dal nostro server è Vercel che ha chiuso la
+      // porta (tempo scaduto, funzione caduta): il numero aiuta a capire quale.
+      if (dati?.errore) throw new Error(dati.errore);
+      throw new Error(risposta.status === 504
+        ? 'Rosy ci ha messo troppo a rispondere (504): riprova fra poco.'
+        : `Rosy non ha risposto (errore ${risposta.status}): riprova fra poco.`);
+    }
+    return {
+      testo: dati.testo || '',
+      proposte: Array.isArray(dati.proposte) ? dati.proposte : [],
+      schede: Array.isArray(dati.schede) ? dati.schede : []
+    };
+  }
+};
+
+export const messaggiApi = {
+  /**
+   * SMS di recupero a una cliente che non passa da un po'. Il server lo manda
+   * solo se ha il consenso al marketing e gli SMS sono attivi per il salone.
+   */
+  recupero: async (clienteId: string, testo: string): Promise<{ mandato: boolean; a?: string[]; motivo?: string }> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+    const risposta = await fetch('/api/messaggi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ azione: 'recupero', clienteId, testo })
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok && risposta.status !== 202) throw new Error(dati?.errore || 'Il server non ha risposto.');
+    return dati;
+  },
+  manda: async (appuntamentoId: string, tipo: 'conferma' | 'rifiuto' | 'spostamento' | 'promemoria' = 'conferma') => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+
+    const risposta = await fetch('/api/messaggi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ appuntamentoId, tipo })
+    });
+
+    const dati = await risposta.json().catch(() => ({}));
+
+    // 202 vuol dire "ricevuto, ma non è partito niente": manca la chiave,
+    // oppure la cliente non ha lasciato un indirizzo. Non è un errore da
+    // fermare tutto, è una cosa da dire.
+    if (!risposta.ok && risposta.status !== 202) {
+      throw new Error(dati?.errore || 'Il server non ha risposto come doveva.');
+    }
+    return dati as { mandato: boolean; canali?: string[]; a?: string[]; motivo?: string };
+  }
+};
+
+/**
+ * Il numero progressivo del preconto. Lo dà il server, dentro una
+ * transazione: due stampe nello stesso momento non prendono lo stesso numero,
+ * e una ristampa riceve il numero che il conto aveva già.
+ */
+/**
+ * La prenotazione dalla pagina pubblica, in due tempi.
+ *
+ * Prima si chiede il codice: se il salone ha gli SMS accesi arriva un codice
+ * di 6 cifre al numero della cliente, altrimenti si risponde che non serve.
+ * Poi si prenota, allegando il codice. A scrivere l'appuntamento è il server:
+ * un controllo fatto solo qui nel browser si potrebbe saltare.
+ */
+async function chiamaPrenota(corpo: any) {
+  const risposta = await fetch('/api/prenota', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpo)
+  });
+  const dati = await risposta.json().catch(() => ({}));
+  if (!risposta.ok) throw new Error(dati?.errore || 'Non riesco a raggiungere il salone. Riprova fra poco.');
+  return dati;
+}
+
+export const prenotazioneApi = {
+  chiediCodice: (salonId: string, telefono: string): Promise<{ serveCodice: boolean; a?: string; avviso?: string }> =>
+    chiamaPrenota({ azione: 'codice', salonId, telefono }),
+  /** `senzaCodice`: il codice non è arrivato e, passati 90", si invia lo stesso (numero non verificato). */
+  prenota: (salonId: string, appuntamento: any, codice?: string, senzaCodice = false): Promise<{ id: string; verificato: boolean }> =>
+    chiamaPrenota({ azione: 'prenota', salonId, appuntamento, codice: codice || '', ...(senzaCodice ? { senzaCodice: true } : {}) })
+};
+
+export const precontoApi = {
+  numero: async (appuntamentoId: string): Promise<{ anno: number; numero: number }> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+    const risposta = await fetch('/api/preconto', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ appuntamentoId })
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok) throw new Error(dati?.errore || 'Il server non ha dato il numero.');
+    return dati;
+  }
+};
+
+/**
+ * Le impostazioni che non devono vedersi da fuori. Il documento del salone
+ * (`salons/{id}`) lo legge anche la pagina di prenotazione pubblica: il
+ * cellulare personale del titolare lì finirebbe sotto gli occhi di tutti.
+ * Qui legge e scrive solo il titolare; il server lo legge per gli avvisi.
+ */
+export const impostazioniPrivateApi = {
+  get: async (): Promise<{ telefono_avvisi?: string }> => {
+    const d = await getDoc(doc(db, 'impostazioni_private', getUserId()));
+    return d.exists() ? (d.data() as any) : {};
+  },
+  salva: async (dati: { telefono_avvisi: string }) => {
+    await setDoc(doc(db, 'impostazioni_private', getUserId()), {
+      telefono_avvisi: (dati.telefono_avvisi || '').trim().slice(0, 30),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  }
+};
+
+export const salonApi = {
+  getSettings: async (): Promise<any> => {
+    const ref = doc(db, 'salons', getUserId());
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return null;
+    return { id: snap.id, ...snap.data() };
+  },
+  updateSettings: async (data: any) => {
+    const ref = doc(db, 'salons', getUserId());
+    const snap = await getDoc(ref);
+
+    // Alla prima scrittura il documento salone deve nascere completo:
+    // le regole del database pretendono ownerEmail, plan e createdAt.
+    const payload = snap.exists() ? data : {
+      ownerEmail: auth.currentUser?.email || '',
+      plan: 'free',
+      createdAt: serverTimestamp(),
+      ...data
+    };
+
+    await setDoc(ref, payload, { merge: true });
+    return { id: getUserId(), ...data };
+  }
+};
+
+export const catalogoApi = {
+  /** Chi prenota legge la vetrina, non il listino vero: lì ci sono le note private. */
+  getPublic: async (salonId: string): Promise<any[]> => {
+    const vetrina = await vetrinaApi.getPublic(salonId);
+    return (vetrina?.servizi || []).map(s => ({ ...s, attivo: true }));
+  },
+  getAll: async (): Promise<any[]> => {
+    const q = query(collection(db, 'catalogo'), where('userId', '==', getUserId()));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  // Ogni modifica al listino rifà la vetrina: è quella che vede chi prenota.
+  create: async (data: any) => {
+    const ref = doc(collection(db, 'catalogo'));
+    const payload = { ...data, userId: getUserId(), createdAt: serverTimestamp() };
+    await setDoc(ref, payload);
+    await vetrinaApi.aggiorna();
+    return { id: ref.id, ...payload };
+  },
+  update: async (id: string, data: any) => {
+    const ref = doc(db, 'catalogo', id);
+    await updateDoc(ref, { ...data });
+    await vetrinaApi.aggiorna();
+    return { id, ...data };
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'catalogo', id));
+    await vetrinaApi.aggiorna();
+    return { success: true };
+  },
+  getCategorie: async () => {
+    const q = query(collection(db, 'categorie_catalogo'), where('userId', '==', getUserId()));
+    const snap = await getDocs(q);
+    // return list of names as component expects strings currently
+    return snap.docs.map(d => d.data().nome);
+  },
+  createCategoria: async (nome: string) => {
+    const ref = doc(collection(db, 'categorie_catalogo'));
+    await setDoc(ref, { nome, userId: getUserId() });
+    return { success: true };
+  },
+  updateCategoria: async (vecchioNome: string, nuovoNome: string) => {
+    const q = query(collection(db, 'categorie_catalogo'), where('userId', '==', getUserId()), where('nome', '==', vecchioNome));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      await updateDoc(snap.docs[0].ref, { nome: nuovoNome });
+    }
+  },
+  deleteCategoria: async (nome: string) => {
+    const q = query(collection(db, 'categorie_catalogo'), where('userId', '==', getUserId()), where('nome', '==', nome));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      await deleteDoc(snap.docs[0].ref);
+    }
+  },
+};
+
+export const dipendentiApi = {
+  /** Chi prenota legge la vetrina: nella scheda vera c'è anche l'email. */
+  getPublic: async (salonId: string): Promise<any[]> => {
+    const vetrina = await vetrinaApi.getPublic(salonId);
+    return (vetrina?.operatori || []).map(o => ({ ...o, attivo: true }));
+  },
+  /** Già nell'ordine delle colonne del calendario, da sinistra a destra. */
+  getAll: async (): Promise<any[]> => {
+    const q = query(collection(db, 'dipendenti'), where('userId', '==', getUserId()));
+    const snap = await getDocs(q);
+    return ordinaOperatori(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  },
+  /**
+   * Salva il nuovo ordine: `ordine` è la posizione da sinistra (0 = prima
+   * colonna). Si scrive solo chi ha cambiato posto, poi si rifà la vetrina
+   * una volta sola, così anche la prenotazione online segue l'ordine.
+   */
+  salvaOrdine: async (cambi: { id: string; ordine: number }[]) => {
+    await Promise.all(cambi.map(c =>
+      updateDoc(doc(db, 'dipendenti', c.id), { ordine: c.ordine, updatedAt: serverTimestamp() })
+    ));
+    if (cambi.length) await vetrinaApi.aggiorna();
+  },
+  // Come per il listino: turni e servizi cambiano, la vetrina li segue.
+  create: async (data: any) => {
+    const ref = doc(collection(db, 'dipendenti'));
+    const payload = { ...data, userId: getUserId(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+    await setDoc(ref, payload);
+    await vetrinaApi.aggiorna();
+    return { id: ref.id, ...payload };
+  },
+  update: async (id: string, data: any) => {
+    const ref = doc(db, 'dipendenti', id);
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+    await vetrinaApi.aggiorna();
+    return { id, ...data };
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'dipendenti', id));
+    await vetrinaApi.aggiorna();
+    return { success: true };
+  },
+};
+
+export const appuntamentiApi = {
+  // getAgendaPublic è stata tolta di proposito: leggeva gli appuntamenti veri
+  // — con dentro nome, cognome e telefono delle clienti — per sapere quando
+  // le operatrici erano occupate. Adesso quel dato si prende da
+  // disponibilitaApi.getPublic, che contiene solo orari.
+
+  // La prenotazione dal sito non si scrive più da qui: passa dal server, che
+  // controlla il codice SMS prima di scriverla. Vedi `prenotazioneApi`.
+
+  getByCliente: async (clienteId: string): Promise<any[]> => {
+    const q = query(collection(db, 'appuntamenti'), where('userId', '==', getUserId()), where('id_cliente', '==', clienteId));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  /**
+   * Appuntamenti di un giorno o di un intervallo.
+   *
+   * Prima scaricava TUTTI gli appuntamenti del salone a ogni apertura
+   * dell'agenda e li filtrava sul computer: con qualche migliaio di
+   * appuntamenti diventava pesante. Ora chiede al database solo la finestra
+   * che serve; se l'indice non è ancora stato pubblicato ricade sul vecchio
+   * comportamento, così l'agenda non si blocca mai.
+   */
+  getAgenda: async (date?: string, startDate?: string, endDate?: string): Promise<any[]> => {
+    const daGiorno = startDate || date;
+    const aGiorno = endDate || date;
+
+    // Confini in ora locale, con un giorno di margine per parte: le date sono
+    // salvate in UTC e senza margine si perderebbero gli appuntamenti serali.
+    let daIso: string | undefined;
+    let aIso: string | undefined;
+    if (daGiorno && aGiorno) {
+      const da = new Date(`${daGiorno}T00:00:00`);
+      da.setDate(da.getDate() - 1);
+      const a = new Date(`${aGiorno}T23:59:59`);
+      a.setDate(a.getDate() + 1);
+      daIso = da.toISOString();
+      aIso = a.toISOString();
+    }
+
+    let items: any[];
+    try {
+      const q = daIso && aIso
+        ? query(
+            collection(db, 'appuntamenti'),
+            where('userId', '==', getUserId()),
+            where('data_ora', '>=', daIso),
+            where('data_ora', '<=', aIso)
+          )
+        : query(collection(db, 'appuntamenti'), where('userId', '==', getUserId()));
+      const snap = await getDocs(q);
+      items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    } catch (err: any) {
+      // Indice composito non ancora pubblicato: si riparte da tutto l'elenco.
+      // Solo in quel caso: con la quota finita o la rete giù rileggere tutto
+      // non servirebbe, e a quota appena tornata la brucerebbe di nuovo.
+      if (!daIso || err?.code !== 'failed-precondition') throw err;
+      console.warn('Query per intervallo non disponibile, ricarico tutto:', err);
+      const snap = await getDocs(query(collection(db, 'appuntamenti'), where('userId', '==', getUserId())));
+      items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+
+    return daGiorno && aGiorno ? soloFraIGiorni(items, daGiorno, aGiorno) : items;
+  },
+  /**
+   * L'agenda in diretta: `quandoCambia` riceve gli appuntamenti del periodo
+   * mostrato, già tagliati sui giorni e in ordine, subito e poi ogni volta che
+   * uno cambia (anche da un altro computer); `quandoArrivaRichiesta` riceve
+   * le richieste dal sito ogni volta che cambiano.
+   *
+   * Prima a ogni cambio si rileggeva tutta la settimana su ogni postazione
+   * aperta (centinaia di letture per uno spostamento); adesso il database
+   * manda solo l'appuntamento cambiato, una lettura.
+   * Se il database non può ascoltare (indice mancante, quota finita, rete giù)
+   * chiama `quandoNonPuo` con l'errore, e chi ascolta ripiega sul ricaricare.
+   */
+  ascolta: (
+    daGiorno: string,
+    aGiorno: string,
+    quandoCambia: (appuntamenti: any[]) => void,
+    quandoArrivaRichiesta: (richieste: any[]) => void,
+    quandoNonPuo: (err: any) => void
+  ): (() => void) => {
+    const da = new Date(`${daGiorno}T00:00:00`); da.setDate(da.getDate() - 1);
+    const a = new Date(`${aGiorno}T23:59:59`); a.setDate(a.getDate() + 1);
+    const uid = getUserId();
+    const smettiAgenda = onSnapshot(
+      query(collection(db, 'appuntamenti'), where('userId', '==', uid),
+        where('data_ora', '>=', da.toISOString()), where('data_ora', '<=', a.toISOString())),
+      snap => {
+        const items = soloFraIGiorni(snap.docs.map(d => ({ id: d.id, ...d.data() })), daGiorno, aGiorno);
+        items.sort((x: any, y: any) => new Date(x.data_ora).getTime() - new Date(y.data_ora).getTime());
+        quandoCambia(items);
+      },
+      err => quandoNonPuo(err)
+    );
+    const smettiRichieste = onSnapshot(
+      query(collection(db, 'appuntamenti'), where('userId', '==', uid), where('stato', '==', 'in_attesa')),
+      snap => {
+        const items = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
+        quandoArrivaRichiesta(items.sort((x, y) => (x.data_ora || '').localeCompare(y.data_ora || '')));
+      },
+      err => quandoNonPuo(err)
+    );
+    return () => { smettiAgenda(); smettiRichieste(); };
+  },
+  /** Le prenotazioni arrivate dal sito e non ancora confermate dal salone. */
+  getRichieste: async (): Promise<any[]> => {
+    const q = query(
+      collection(db, 'appuntamenti'),
+      where('userId', '==', getUserId()),
+      where('stato', '==', 'in_attesa')
+    );
+    const snap = await getDocs(q);
+    const items = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
+    return items.sort((a, b) => (a.data_ora || '').localeCompare(b.data_ora || ''));
+  },
+  create: async (data: any) => {
+    const ref = doc(collection(db, 'appuntamenti'));
+    const uid = getUserId();
+    const payload = {
+      ...data,
+      userId: uid,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    };
+    await setDoc(ref, payload);
+    await disponibilitaApi.scrivi(uid, { id: ref.id, ...data });
+    return { id: ref.id, ...payload };
+  },
+  update: async (id: string, data: any) => {
+    const ref = doc(db, 'appuntamenti', id);
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+
+    // Gli orari occupati seguono l'appuntamento. Si rilegge il documento
+    // aggiornato perché una modifica parziale (solo l'operatrice, solo l'ora)
+    // da sola non basta a ricalcolare le fasce.
+    try {
+      const aggiornato = await getDoc(ref);
+      if (aggiornato.exists()) {
+        await disponibilitaApi.scrivi(getUserId(), { id, ...aggiornato.data() });
+      }
+    } catch (err) {
+      console.warn('Orari occupati non aggiornati per', id, err);
+    }
+    return { id, ...data };
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'appuntamenti', id));
+    await disponibilitaApi.elimina(id);
+    return { success: true };
+  }
+};
+
+export const buoniApi = {
+  getAll: async (): Promise<any[]> => {
+    const q = query(collection(db, 'buoni'), where('userId', '==', getUserId()));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  /**
+   * I buoni in diretta: la funzione si richiama da sola ogni volta che un
+   * buono cambia, chiunque l'abbia cambiato (un'altra cassa, il foglio).
+   * Restituisce la funzione per smettere di ascoltare.
+   */
+  ascolta: (quandoCambiano: (buoni: any[]) => void, quandoSbaglia?: (e: Error) => void): (() => void) => {
+    const q = query(collection(db, 'buoni'), where('userId', '==', getUserId()));
+    return onSnapshot(
+      q,
+      snap => quandoCambiano(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => quandoSbaglia?.(err)
+    );
+  },
+  create: async (data: any) => {
+    const ref = doc(collection(db, 'buoni'));
+    const payload = { ...data, userId: getUserId(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+    await setDoc(ref, payload);
+    return { id: ref.id, ...payload };
+  },
+  update: async (id: string, data: any) => {
+    const ref = doc(db, 'buoni', id);
+    await updateDoc(ref, { ...data, updatedAt: serverTimestamp() });
+    return { id, ...data };
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'buoni', id));
+    return { success: true };
+  },
+  /**
+   * Chiede al server di leggere il foglio Google dei buoni pagati online e di
+   * aggiungere quelli nuovi. `acceso: false` vuol dire che per questo salone
+   * il foglio non c'è: la pagina non mostra niente.
+   */
+  aggiornaDalFoglio: async (): Promise<EsitoFoglio> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return { acceso: false };
+    const risposta = await fetch('/api/buoni-foglio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: '{}'
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok) return { acceso: true, aggiunti: 0, errore: dati?.errore || 'Il server non ha risposto.' };
+    return dati;
+  }
+};
+
+export interface EsitoFoglio { acceso: boolean; aggiunti?: number; letti?: number; errore?: string; motivo?: string }
+
+
+// ---------------------------------------------------------------------------
+// Quello che vede il mondo esterno
+// ---------------------------------------------------------------------------
+//
+// La pagina di prenotazione gira senza login. Non legge più gli appuntamenti
+// veri — che contengono nome, cognome e telefono delle clienti — ma solo due
+// liste ripulite: la VETRINA (listino e operatrici) e la DISPONIBILITÀ (gli
+// orari occupati, senza dire da chi).
+//
+// Si tengono aggiornate da qui, nello stesso punto in cui passano già tutte le
+// modifiche: così non è una cosa che ci si può dimenticare di fare.
+
+export const vetrinaApi = {
+  /** La rilegge chi prenota, senza essere entrato. */
+  getPublic: async (salonId: string): Promise<Vetrina | null> => {
+    const d = await getDoc(doc(db, 'vetrina', salonId));
+    return d.exists() ? (d.data() as Vetrina) : null;
+  },
+
+  /** Rifà la vetrina da listino e operatrici. Si chiama dopo ogni modifica. */
+  aggiorna: async (): Promise<void> => {
+    try {
+      const uid = getUserId();
+      const [cat, dip] = await Promise.all([
+        getDocs(query(collection(db, 'catalogo'), where('userId', '==', uid))),
+        getDocs(query(collection(db, 'dipendenti'), where('userId', '==', uid)))
+      ]);
+      await setDoc(doc(db, 'vetrina', uid), costruisciVetrina(
+        uid,
+        cat.docs.map(d => ({ id: d.id, ...d.data() })),
+        dip.docs.map(d => ({ id: d.id, ...d.data() }))
+      ));
+    } catch (err) {
+      // La vetrina è uno specchio: se non si aggiorna adesso, il salone
+      // continua a lavorare e la si rifà alla prossima modifica.
+      console.warn('Non sono riuscito ad aggiornare la vetrina:', err);
+    }
+  }
+};
+
+export const disponibilitaApi = {
+  /** Gli orari occupati da una certa data in poi. Nessun nome, nessun numero. */
+  getPublic: async (salonId: string, dalGiorno?: string): Promise<Disponibilita[]> => {
+    const vincoli: any[] = [where('userId', '==', salonId)];
+    if (dalGiorno) vincoli.push(where('giorno', '>=', dalGiorno));
+    try {
+      const snap = await getDocs(query(collection(db, 'disponibilita'), ...vincoli));
+      return snap.docs.map(d => d.data() as Disponibilita);
+    } catch (err) {
+      // Indice non ancora pubblicato: si riparte senza il taglio sulla data.
+      const snap = await getDocs(query(collection(db, 'disponibilita'), where('userId', '==', salonId)));
+      return snap.docs
+        .map(d => d.data() as Disponibilita)
+        .filter(x => !dalGiorno || (x.giorno || '') >= dalGiorno);
+    }
+  },
+
+  /** Rispecchia un appuntamento negli orari occupati. */
+  scrivi: async (salonId: string, app: any): Promise<void> => {
+    try {
+      await setDoc(doc(db, 'disponibilita', app.id), disponibilitaPerAppuntamento(salonId, app));
+    } catch (err) {
+      console.warn('Non sono riuscito ad aggiornare gli orari occupati:', err);
+    }
+  },
+
+  elimina: async (id: string): Promise<void> => {
+    try {
+      await deleteDoc(doc(db, 'disponibilita', id));
+    } catch (err) {
+      console.warn('Non sono riuscito a togliere gli orari occupati:', err);
+    }
+  },
+
+  /**
+   * Allineamento una tantum: gli appuntamenti già in agenda non hanno ancora
+   * la loro riga fra gli orari occupati. Si scrive quella di oggi in avanti,
+   * una volta sola, quando il salone apre l'agenda.
+   */
+  allinea: async (appuntamenti: any[]): Promise<number> => {
+    const uid = getUserId();
+    const oggi = new Date();
+    oggi.setHours(0, 0, 0, 0);
+
+    const futuri = (appuntamenti || []).filter(a => {
+      const d = aData(a.data_ora);
+      return d && d.getTime() >= oggi.getTime();
+    });
+
+    let scritti = 0;
+    for (const app of futuri) {
+      try {
+        const gia = await getDoc(doc(db, 'disponibilita', app.id));
+        if (gia.exists()) continue;
+        await setDoc(doc(db, 'disponibilita', app.id), disponibilitaPerAppuntamento(uid, app));
+        scritti++;
+      } catch (err) {
+        console.warn('Allineamento saltato per', app.id, err);
+      }
+    }
+    return scritti;
+  }
+};
+
+
+// ---------------------------------------------------------
+// Registro SMS: ogni messaggio che il gestionale prova a mandare, partito o
+// no. Lo scrive solo il server; qui si legge.
+// ---------------------------------------------------------
+
+export interface VoceRegistroSms {
+  id: string;
+  tipo: string;
+  appuntamentoId?: string;
+  cliente?: string;
+  a: string;
+  testo: string;
+  esito: 'consegnato' | 'errore';
+  motivo?: string;
+  quando: string;
+  giorno: string;
+}
+
+/** Gli ultimi `giorni` giorni, da oggi all'indietro, scritti 2026-10-06. */
+const giorniFra = (giorni: number): string[] => {
+  const fuori: string[] = [];
+  const d = new Date();
+  for (let i = 0; i < giorni; i++) {
+    const g = new Date(d.getFullYear(), d.getMonth(), d.getDate() - i);
+    fuori.push(`${g.getFullYear()}-${String(g.getMonth() + 1).padStart(2, '0')}-${String(g.getDate()).padStart(2, '0')}`);
+  }
+  return fuori;
+};
+
+export const registroSmsApi = {
+  /**
+   * Gli ultimi giorni di registro, in diretta. Si filtra per giorno con
+   * uguaglianze (`in`), così il database non ha bisogno di indici in più.
+   */
+  ascolta: (giorni: number, quandoCambia: (voci: VoceRegistroSms[]) => void, quandoSbaglia?: (e: Error) => void): (() => void) => {
+    const q = query(
+      collection(db, 'registro_sms'),
+      where('userId', '==', getUserId()),
+      where('giorno', 'in', giorniFra(Math.min(30, Math.max(1, giorni))))
+    );
+    return onSnapshot(q, snap => {
+      const voci = snap.docs.map(d => ({ id: d.id, ...d.data() })) as VoceRegistroSms[];
+      voci.sort((a, b) => (b.quando || '').localeCompare(a.quando || ''));
+      quandoCambia(voci);
+    }, err => quandoSbaglia?.(err));
+  },
+  /** Manda un SMS di prova al numero scritto: serve a controllare il tablet. */
+  prova: async (telefono: string): Promise<{ mandato: boolean; a?: string; motivo?: string }> => {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+    const risposta = await fetch('/api/messaggi', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ azione: 'prova', telefono })
+    });
+    const dati = await risposta.json().catch(() => ({}));
+    if (!risposta.ok && risposta.status !== 202) throw new Error(dati?.errore || 'Il server non ha risposto.');
+    return dati;
+  }
+};
+
+/**
+ * Una copia di tutti i dati del salone in un file, da tenere sul computer o
+ * su Google Drive. Legge tutto una volta (con qualche migliaio di
+ * appuntamenti sono qualche migliaio di letture): va bene farlo una volta al
+ * mese o prima di una pulizia, non tutti i giorni.
+ */
+export const COLLEZIONI_BACKUP = ['clienti', 'appuntamenti', 'buoni', 'catalogo', 'categorie_catalogo', 'dipendenti', 'registro_sms'] as const;
+
+export const backupApi = {
+  esporta: async (): Promise<{ file: Blob; nome: string; conteggi: Record<string, number> }> => {
+    const uid = getUserId();
+    const dati: Record<string, any[]> = {};
+    for (const nome of COLLEZIONI_BACKUP) {
+      try {
+        const snap = nome === 'clienti'
+          ? null
+          : await getDocs(query(collection(db, nome), where('userId', '==', uid)));
+        dati[nome] = snap ? snap.docs.map(d => ({ id: d.id, ...d.data() })) : await clientiApi.getAll();
+      } catch (err) {
+        console.warn(`Backup: ${nome} non letta`, err);
+        dati[nome] = [];
+      }
+    }
+    // Le date di Firestore diventano testo leggibile.
+    const testo = JSON.stringify(
+      { salone: uid, creato: new Date().toISOString(), dati },
+      (_k, v) => (v && typeof v === 'object' && typeof v.toDate === 'function') ? v.toDate().toISOString() : v,
+      1
+    );
+    const oggi = new Date().toISOString().slice(0, 10);
+    const conteggi = Object.fromEntries(Object.entries(dati).map(([k, v]) => [k, v.length]));
+    return { file: new Blob([testo], { type: 'application/json' }), nome: `backup-salone-${oggi}.json`, conteggi };
+  }
+};
+
+/**
+ * Il magazzino dei prodotti. In diretta: la pagina si aggiorna da sola, e
+ * dopo il primo caricamento arrivano solo i prodotti cambiati.
+ */
+export const prodottiApi = {
+  ascolta: (quandoCambiano: (prodotti: any[]) => void, quandoSbaglia?: (e: Error) => void): (() => void) => {
+    const q = query(collection(db, 'prodotti'), where('userId', '==', getUserId()));
+    return onSnapshot(
+      q,
+      snap => quandoCambiano(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => quandoSbaglia?.(err)
+    );
+  },
+  create: async (dati: any) => {
+    const ref = doc(collection(db, 'prodotti'));
+    await setDoc(ref, { ...dati, userId: getUserId(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    return { id: ref.id };
+  },
+  /** Sostituisce la scheda: i campi svuotati nel pannello spariscono davvero. */
+  update: async (id: string, dati: any) => {
+    const ref = doc(db, 'prodotti', id);
+    const prima = await getDoc(ref);
+    const vecchi = (prima.data() || {}) as any;
+    await setDoc(ref, { ...dati, userId: getUserId(), createdAt: vecchi.createdAt || serverTimestamp(), updatedAt: serverTimestamp() });
+    return { id };
+  },
+  /**
+   * Cambia i pezzi di un prodotto e lo scrive nel registro, tutto insieme:
+   * o vanno a buon fine tutti e due, o nessuno.
+   */
+  muovi: async (prodotto: { id: string; nome: string }, tipo: TipoMovimento, quantita: number, extra: { importo?: number; appuntamentoId?: string } = {}) => {
+    const q = Math.abs(Math.trunc(Number(quantita) || 0));
+    if (!q) return;
+    const uid = getUserId();
+    const adesso = new Date();
+    const lotto = writeBatch(db);
+    lotto.update(doc(db, 'prodotti', prodotto.id), { giacenza: increment(variazione(tipo, q)), updatedAt: serverTimestamp() });
+    lotto.set(doc(collection(db, 'movimenti_prodotti')), {
+      userId: uid,
+      prodottoId: prodotto.id,
+      nome: (prodotto.nome || '').slice(0, 120),
+      tipo,
+      quantita: q,
+      ...(extra.importo != null ? { importo: Math.round(extra.importo * 100) / 100 } : {}),
+      ...(extra.appuntamentoId ? { appuntamentoId: extra.appuntamentoId } : {}),
+      quando: adesso.toISOString(),
+      mese: meseDi(adesso),
+      chi: auth.currentUser?.displayName || auth.currentUser?.email || '',
+      createdAt: serverTimestamp()
+    });
+    await lotto.commit();
+  },
+  /**
+   * Chiudendo un appuntamento: scala dal magazzino i prodotti venduti nel
+   * conto, o rimette quelli tolti se lo si riapre per correggerlo. Prende le
+   * differenze già calcolate (`differenzeMagazzino`).
+   */
+  vendiDalConto: async (appuntamentoId: string, differenze: { prodottoId: string; nome: string; quantita: number; prezzo: number }[]) => {
+    for (const d of differenze) {
+      await prodottiApi.muovi(
+        { id: d.prodottoId, nome: d.nome },
+        d.quantita > 0 ? 'vendita' : 'reso',
+        Math.abs(d.quantita),
+        { appuntamentoId, ...(d.quantita > 0 ? { importo: d.prezzo * d.quantita } : {}) }
+      );
+    }
+  },
+  /** I prodotti una volta sola (per il preconto). */
+  getAll: async (): Promise<any[]> => {
+    const snap = await getDocs(query(collection(db, 'prodotti'), where('userId', '==', getUserId())));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  /** Il registro di un prodotto, dal più recente. */
+  movimenti: async (prodottoId: string): Promise<any[]> => {
+    const snap = await getDocs(query(collection(db, 'movimenti_prodotti'), where('userId', '==', getUserId()), where('prodottoId', '==', prodottoId)));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a: any, b: any) => (b.quando || '').localeCompare(a.quando || ''));
+  },
+  /** I movimenti di un mese ("2026-11"): servono al report. */
+  movimentiDelMese: async (mese: string): Promise<any[]> => {
+    const snap = await getDocs(query(collection(db, 'movimenti_prodotti'), where('userId', '==', getUserId()), where('mese', '==', mese)));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  },
+  delete: async (id: string) => {
+    await deleteDoc(doc(db, 'prodotti', id));
+  }
+};

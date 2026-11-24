@@ -1,0 +1,119 @@
+import { saloneDelDominio } from '../salone-app/frontend/lib/domini';
+// Punto d'ingresso dell'anteprima: monta le pagine vere dentro il Layout vero,
+// con i dati finti. Serve a guardare le schermate prima di dire che sono a posto.
+import InformativaPrivacy from '../salone-app/frontend/app/(public)/[salonId]/privacy/page';
+import { StrictMode, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import '../src/index.css';
+import Layout from '../src/components/Layout';
+import RosyChat from '../src/components/RosyChat';
+import SchermataAccesso from '../src/components/SchermataAccesso';
+import { impostaSessione } from '@/lib/sessione';
+
+import DashboardHub from '@/app/(dashboard)/hub/page';
+import RosyHub from '@/app/(dashboard)/rosie/page';
+import PaginaAgenda from '@/app/(dashboard)/agenda/page';
+import GestioneCatalogo from '@/app/(dashboard)/catalogo/page';
+import PaginaReport from '@/app/(dashboard)/report/page';
+import GestioneDipendenti from '@/app/(dashboard)/dipendenti/page';
+import GestioneClienti from '@/app/(dashboard)/clienti/page';
+import SchedaCliente from '@/app/(dashboard)/clienti/[id]/page';
+import SettingsPage from '@/app/(dashboard)/settings/page';
+import ProdottiPage from '@/app/(dashboard)/prodotti/page';
+import AutomazioniPage from '@/app/(dashboard)/automazioni/page';
+import BuoniSpa from '@/app/(dashboard)/buoni-spa/page';
+import PrenotazionePubblica from '@/app/(public)/[salonId]/prenota/page';
+
+// ?tema=scuro apre direttamente in modalità scura. Si passa dalla memoria del
+// browser, la stessa che usa il programma, così si prova la strada vera.
+const tema = new URLSearchParams(location.search).get('tema');
+if (tema === 'scuro') localStorage.setItem('theme', 'dark');
+if (tema === 'chiaro') localStorage.setItem('theme', 'light');
+document.documentElement.classList.toggle('dark', localStorage.getItem('theme') === 'dark');
+
+// ?ruolo=operatrice apre l'anteprima con i permessi ridotti, per vedere che
+// cosa vede davvero chi non è la titolare. Senza, si è la titolare.
+const ruolo = new URLSearchParams(location.search).get('ruolo');
+const permessiFinti = (new URLSearchParams(location.search).get('permessi') || 'agenda,clienti')
+  .split(',').filter(Boolean) as any;
+// L'indirizzo del salone decide quali funzioni riservate sono accese: qui si
+// finge quello di RD Salon, altrimenti nell'anteprima i Buoni non si vedono.
+// Con ?salone=altro@esempio.it si guarda com'è il gestionale per gli altri.
+const emailSalone = new URLSearchParams(location.search).get('salone') || 'rdsalon.ceccano@gmail.com';
+impostaSessione(ruolo === 'operatrice'
+  ? { uid: 'u2', salonId: 'salone', titolare: false, nome: 'Giulia', permessi: permessiFinti, emailSalone }
+  : { uid: 'salone', salonId: 'salone', titolare: true, nome: 'Rosanna', permessi: null, emailSalone });
+
+/** Solo per guardarla: la schermata di accesso senza Firebase dietro. */
+function AnteprimaAccesso() {
+  const [modoOperatrice, setModoOperatrice] = useState(
+    new URLSearchParams(location.search).get('modo') === 'operatrice'
+  );
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errore, setErrore] = useState<string | null>(null);
+  return (
+    <SchermataAccesso
+      modoOperatrice={modoOperatrice}
+      setModoOperatrice={setModoOperatrice}
+      accessoInCorso={false}
+      erroreAccesso={errore}
+      setErroreAccesso={setErrore}
+      email={email} setEmail={setEmail}
+      password={password} setPassword={setPassword}
+      onGoogle={() => setErrore('Qui è solo un\'anteprima: l\'accesso vero passa da Firebase.')}
+      onOperatrice={(e) => { e.preventDefault(); setErrore('Indirizzo o password non corretti. Se non li ricordi, chiedi alla titolare di rifarteli.'); }}
+    />
+  );
+}
+
+// Come nel programma vero: su un indirizzo tutto del salone (qui si prova con
+// VITE_DOMINI_PRENOTAZIONE="127.0.0.1=salone-prova") si apre la prenotazione.
+const saloneDominio = saloneDelDominio(window.location.hostname);
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <BrowserRouter>
+      {saloneDominio ? (
+        <Routes>
+          <Route path="/" element={<PrenotazionePubblica salonIdFisso={saloneDominio} />} />
+          <Route path="/privacy" element={<InformativaPrivacy salonIdFisso={saloneDominio} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      ) : (
+      <Routes>
+        {/* Come nel programma vero: l'indirizzo porta l'identificativo del salone. */}
+        <Route path="/:salonId/prenota" element={<PrenotazionePubblica />} />
+        <Route path="/:salonId/privacy" element={<InformativaPrivacy />} />
+        <Route path="/accesso" element={<AnteprimaAccesso />} />
+        {/* La chat di Rosy da sola: nell'anteprima nessuno è collegato, e il pulsante tondo non compare. */}
+        <Route path="/rosy-chat" element={
+          <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
+            <div className="w-[400px] h-[640px] bg-white border border-zinc-200 rounded-3xl shadow-2xl flex flex-col overflow-hidden"><RosyChat /></div>
+          </div>
+        } />
+        <Route path="*" element={
+          <Layout>
+            <Routes>
+              <Route path="/" element={<DashboardHub />} />
+              <Route path="/rosy" element={<RosyHub />} />
+              <Route path="/rosie" element={<Navigate to="/rosy" replace />} />
+              <Route path="/agenda" element={<PaginaAgenda />} />
+              <Route path="/catalogo" element={<GestioneCatalogo />} />
+              <Route path="/report" element={<PaginaReport />} />
+              <Route path="/dipendenti" element={<GestioneDipendenti />} />
+              <Route path="/clienti" element={<GestioneClienti />} />
+              <Route path="/clienti/:id" element={<SchedaCliente />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/prodotti" element={<ProdottiPage />} />
+              <Route path="/automazioni" element={<AutomazioniPage />} />
+              <Route path="/buoni-spa" element={<BuoniSpa />} />
+            </Routes>
+          </Layout>
+        } />
+      </Routes>
+      )}
+    </BrowserRouter>
+  </StrictMode>
+);

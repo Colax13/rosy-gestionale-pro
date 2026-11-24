@@ -1,0 +1,977 @@
+# Gestionale Salone — Lista modifiche (dagli audio)
+
+> Documento di lavoro. Raccoglie **tutto** quello che è stato detto negli audio, diviso in:
+> **A)** modifiche richieste · **B)** decisioni da prendere insieme · **C)** cose da controllare (verifiche tecniche già emerse leggendo il codice).
+> Nessuna modifica è stata ancora implementata: prima si controlla insieme, punto per punto.
+
+---
+
+## A. Modifiche richieste
+
+### A1 — Agenda: schermata piena, tutti gli operatori visibili
+**Priorità: ALTA**
+
+- La pagina di default deve essere **solo l'agenda**, a tutto schermo, con pochissime impostazioni intorno.
+- Un punto/pulsante dedicato apre la **dashboard** con tutto il resto (report, impostazioni, ecc.).
+- Devono vedersi **tutte le colonne di tutti gli operatori contemporaneamente**, tutte della **stessa larghezza**, senza scroll orizzontale.
+- Oggi se ne vedono solo ~4 e poi bisogna scorrere.
+
+*Stato nel codice:* `salone-app/frontend/app/(dashboard)/agenda/page.tsx` — ogni colonna operatore ha `min-w-[240px]` e il contenitore `min-w-[1000px]` (righe ~478 e ~485/575). Oltre 4 operatori parte lo scroll orizzontale. Va sostituito con una griglia a larghezza proporzionale (`1fr` per operatore).
+
+---
+
+### A2 — Barra superiore ridotta + colonna sinistra
+**Priorità: MEDIA**
+
+- Solo **una colonna a sinistra** e una **barra piccola in alto** con: **Clienti · Prodotti · Buoni**.
+- Tutto il resto va spostato dentro la dashboard.
+
+---
+
+### A3 — Calendario mensile sempre visibile
+**Priorità: ALTA**
+
+- Un **calendario del mese** fisso in un angolo (in alto a sinistra o nella colonna laterale), con scritto il mese (es. "Settembre") e tutti i giorni.
+- Clic su un giorno → si apre direttamente l'agenda di **quel giorno**.
+- Serve per non dover scorrere giorno per giorno mentre si è al telefono con la cliente.
+
+*Stato nel codice:* un mini-calendario esiste già ma è nascosto dentro un menù a tendina (agenda/page.tsx righe ~892-935). Va estratto e reso sempre visibile.
+
+---
+
+### A4 — Tempo di posa nei servizi
+**Priorità: ALTA**
+
+- Nella **creazione del servizio** devono esserci **due campi separati e fissi per tutti i servizi**:
+  - **tempo di applicazione / lavorazione** (es. 15 min)
+  - **tempo di posa** (es. 45 min)
+- Devono comparire su **ogni tipo di servizio**, anche sulla piega. Se il tempo di posa è **0**, semplicemente non viene calcolato.
+
+*Stato nel codice:* i campi `tempo_lavorazione_minuti` e `tempo_posa_minuti` **esistono già** nel form catalogo (`catalogo/page.tsx` righe 32-34, 73-74, 103-106) ma **non vengono usati** dall'agenda.
+
+---
+
+### A5 — La posa deve creare un buco prenotabile in agenda
+**Priorità: ALTA — è il cuore della richiesta**
+
+- Se metto colore (15 min applicazione + 45 min posa) e poi piega, durante la posa deve crearsi un **buco nell'agenda** in cui posso inserire un'altra cliente.
+- Oggi l'appuntamento è un **blocco unico**: il tempo di posa risulta occupato e non si può prenotare nessun altro.
+
+*Stato nel codice:*
+- `agenda/page.tsx` righe 1288-1301: la posa viene **indovinata dal nome del servizio** (se contiene "colore", "sole", "schiariture", "permanente") con lavorazione fissa a 15 minuti. Non legge `tempo_posa_minuti`.
+- Il "buco" è solo **grafico dentro la card**: la durata totale dell'appuntamento resta la somma piena, quindi lo slot resta occupato.
+- Il controllo sovrapposizioni (`AggiungiCalendarioSidebar.tsx` righe 324-400) blocca comunque l'inserimento in quella fascia.
+
+---
+
+### A6 — Appuntamenti sovrapposti non devono impilarsi a colonne
+**Priorità: MEDIA**
+
+- Inserendo più appuntamenti si crea una specie di colonna/pacco unico: non va bene, va rivista la resa grafica delle sovrapposizioni.
+
+*Stato nel codice:* `agenda/page.tsx` righe ~540-575 (`colIndex` / `colTotal`) — le sovrapposizioni si dividono lo spazio della colonna.
+
+---
+
+### A7 — Spostare gli appuntamenti trascinandoli (drag & drop)
+**Priorità: ALTA**
+
+- Poter **trascinare** un appuntamento per spostarlo di orario o cambiare operatore ("switcharlo").
+
+*Stato nel codice:* **non esiste alcun drag & drop** in agenda. Da costruire da zero.
+
+---
+
+### A8 — Disponibilità operatore: giorni oscurati ma comunque utilizzabili
+**Priorità: ALTA**
+
+- Creando il team imposto ad es. Rossella disponibile solo **martedì, giovedì, sabato**.
+- Negli altri giorni la sua colonna **c'è comunque**, ma **oscurata / grigia**.
+- Deve restare **possibile inserire appuntamenti** anche nei giorni oscurati (capita che venga lo stesso).
+
+*Stato nel codice:*
+- I turni per dipendente esistono già (`dipendenti/TurniCalendario.tsx`, campo `turni` con lunedì-domenica, orario base e permessi).
+- Ma l'agenda **li ignora**: c'è un orario lavorativo **fisso 9:00-18:00 hardcoded** (`agenda/page.tsx` riga ~584, commento nel codice: *"Fake scheduling logic assuming default works from 9 to 18"*).
+
+---
+
+### A9 — Tema chiaro
+**Priorità: MEDIA**
+
+- Lo sfondo nero è troppo pesante → **bianco** (eventualmente leggermente caldo, ma preferenza: bianco).
+- Appuntamenti e **nomi devono leggersi bene**.
+
+*Stato nel codice:* `index.html` è già impostato su tema chiaro di default, ma le pagine hanno i colori **scuri scritti fissi** (`bg-zinc-900`, `bg-zinc-950`, `text-zinc-100`) senza varianti chiare. Serve una passata su tutte le pagine, agenda per prima.
+
+---
+
+### A10 — Sezione Buoni
+**Priorità: MEDIA**
+
+- Voce **Buoni** nella barra in alto → si apre una **tabella con tutti i buoni**.
+- Si inserisce il buono dal gestionale invece di scriverlo sul foglio.
+
+*Stato nel codice:* **non esiste**. La pagina `prodotti/page.tsx` è un segnaposto ("Pagine in via di sviluppo").
+
+---
+
+### A11 — Importazione clienti già esistenti
+**Priorità: ALTA (blocca la partenza)**
+
+- I clienti già in lista devono poter essere **trasferiti in blocco**, senza copiarli uno per uno.
+- Da capire da che formato partiamo (Excel, CSV, foto/PDF dell'elenco, export dal gestionale attuale).
+
+*Stato nel codice:* esiste una funzione di import con AI nel backend (`backend/src/routes/import.ts`, legge PDF/immagini con Gemini) ma **non è collegata**: nel frontend `clientiApi.importAi` lancia *"Not implemented on frontend yet"* (`lib/api-client.ts` riga 51).
+
+---
+
+### A12 — Creazione cliente senza numero ed email
+**Priorità: ALTA — è un blocco quotidiano**
+
+- Deve essere possibile creare una cliente **anche senza telefono e senza email** (cliente anziana che non li ha).
+- Oggi dice che non è possibile creare.
+
+*Causa probabile trovata:* in `AggiungiCalendarioSidebar.tsx` righe 221-222 i campi vuoti vengono inviati come `telefono: undefined` / `email: undefined`, e Firestore **rifiuta i valori `undefined`** se non è attivo `ignoreUndefinedProperties` (in `src/lib/firebase.ts` non lo è). Da verificare insieme riproducendo l'errore.
+
+---
+
+### A13 — Messaggi automatici al cliente
+**Priorità: ALTA**
+
+- Alla **creazione dell'appuntamento** → messaggio automatico al numero di telefono.
+- Il **giorno prima** → messaggio di promemoria.
+- Se facciamo l'app, meglio **notifiche push** al posto degli SMS: notifica alla prenotazione, notifica il giorno prima, notifica in caso di annullamento. Così si evitano i costi e la gestione degli SMS.
+
+*Stato nel codice:* il cron dei promemoria esiste ma è **tutto commentato / mock** (`backend/src/cron/promemoria.ts`: Twilio e Resend commentati). Non gira nulla in produzione.
+
+---
+
+### A14 — Flusso "richiesta di appuntamento" con conferma
+**Priorità: ALTA**
+
+- Il cliente prenota → **non è subito confermato**: gli compare *"Richiesta di appuntamento inviata"*.
+- Sul gestionale arriva una **notifica** con le azioni: **Conferma · Rifiuta · Modifica · Ricontatta la cliente**.
+- Solo dopo la conferma al cliente arriva *"Appuntamento confermato"*.
+- Vantaggio doppio: filtro sugli appuntamenti presi a caso, e possibilità di rielaborare o richiamare.
+
+*Stato nel codice:* la prenotazione pubblica crea l'appuntamento **già come `stato: 'prenotato'`** (`(public)/[salonId]/prenota/page.tsx` riga 237), senza passaggio di approvazione. In più la schermata finale dice *"Abbiamo inviato un SMS di conferma al numero…"* (riga 744) ma **nessun SMS viene inviato**: messaggio da correggere.
+
+---
+
+### A15 — Stabilità e semplicità
+**Priorità: MASSIMA — la cosa più importante di tutte**
+
+- Una volta inserito tutto, **non si deve bloccare**, niente bug.
+- Le ragazze del salone non hanno dimestichezza con il computer: tutto deve essere **il più semplice possibile**.
+- Da fare: giro di test su tutte le operazioni quotidiane prima di metterlo in mano al personale.
+
+---
+
+## B. Decisioni da prendere insieme
+
+| # | Domanda | Note |
+|---|---------|------|
+| B1 | **App vera o sito?** I clienti scaricano un'app o vanno sul sito per prenotare? | Nel repo c'è già un `manifest.json`: si può partire con una **web-app installabile (PWA)** — si aggiunge alla schermata home come un'app, supporta le notifiche, costi vicini a zero, nessun passaggio dagli store. L'app nativa su App Store/Play Store è il passo successivo (Apple: 99$/anno + tempi di revisione). Proposta: **si parte dal sito/PWA**, l'app si valuta dopo. |
+| B2 | **Notifiche push o SMS?** | Le push richiedono l'app/PWA installata dalla cliente. Gli SMS funzionano con chiunque ma si pagano a messaggio. Probabile scelta: **push a chi ha installato, SMS/WhatsApp come riserva**. |
+| B3 | **Costi ricorrenti** — budget indicato: intorno ai 100€, anche 50€/anno va bene, purché la somma non esploda. | Da preparare una **stima scritta**: hosting, database, eventuali SMS, eventuale account Apple. |
+| B4 | **Formato dei clienti da importare** | Excel / CSV / foto dell'agenda / export dal gestionale attuale: cambia parecchio il lavoro. |
+| B5 | **Due progetti nello stesso repo** | C'è l'app root (Vite + Firebase, "Rosy") e la cartella `salone-app` con un backend Express che usa **dati finti in memoria** e Supabase commentato. Il frontend ormai parla **direttamente con Firestore**. Va deciso se cancellare il backend vecchio: oggi è codice morto che confonde. |
+| B6 | **Call con schermo condiviso** | Da fissare, per vedere insieme le cose difficili da spiegare a voce. iPhone di lavoro disponibile per i test nel weekend. |
+
+---
+
+## C. Cose da controllare (verifiche tecniche)
+
+Trovate leggendo il codice, **da verificare insieme una per una**. Le prime tre sono le candidate principali dietro ai blocchi.
+
+- [x] **C1 — CORRETTO: gli update parziali passano.** Verificato: nelle regole Firestore, su un aggiornamento `request.resource.data` è il documento **risultante** (vecchi campi + nuovi), non solo i campi inviati. Quindi `hasAll([...])` è soddisfatto e `clientiApi.update`, `dipendentiApi.update` e `appuntamentiApi.update` non vengono rifiutati. Il sospetto era infondato.
+  **Quello che invece era rotto davvero, ed è stato sistemato:**
+  - `salons` rifiutava il salvataggio quando l'onboarding veniva rifatto, perché riscriveva `createdAt` con un timestamp nuovo mentre le regole lo vogliono immutabile (`src/components/Onboarding.tsx`).
+  - il salvataggio delle impostazioni falliva se il documento salone non era ancora stato creato: mancavano `ownerEmail`, `plan` e `createdAt` richiesti in creazione (`lib/api-client.ts`).
+- [x] **C2 — RISOLTO: creazione cliente senza telefono/email** → vedi A12. Attivato `ignoreUndefinedProperties` in `src/lib/firebase.ts`.
+- [ ] **C3 — Dati leggibili da chiunque.** In `firestore.rules` le collezioni `appuntamenti`, `dipendenti` e `catalogo` hanno `allow get, list: if true`: **chiunque conosca l'indirizzo può leggere tutti gli appuntamenti, con nomi e telefoni delle clienti.** Da chiudere (questione privacy/GDPR, non solo tecnica).
+- [ ] **C4 — Agenda lenta col tempo.** `appuntamentiApi.getAgenda` scarica **tutti** gli appuntamenti dell'utente e filtra sul computer. Con qualche migliaio di appuntamenti diventa lenta e pesante. Da sistemare prima che il salone accumuli storico.
+- [ ] **C5 — Orario 9:00-18:00 fisso** nell'agenda, ignora i turni configurati → vedi A8.
+- [ ] **C6 — Posa indovinata dal nome del servizio** invece che dal campo → vedi A4/A5.
+- [ ] **C7 — Il cron dei promemoria non gira.** Codice commentato, e comunque su hosting serverless un `node-cron` non resta attivo: serve uno scheduler esterno.
+- [ ] **C8 — Pagina Report con numeri finti.** `reportApi.getOverview` restituisce zeri hardcoded (`api-client.ts` righe 14-23).
+- [ ] **C9 — Pagine Prodotti e Automazioni** sono segnaposto vuoti.
+- [ ] **C10 — Backend Express con dati finti** (`salone-app/backend/src/routes/*`): catalogo e clienti in memoria, Supabase commentato. Ogni riavvio azzera tutto. Non è collegato al frontend → vedi B5.
+- [ ] **C11 — Messaggio "SMS di conferma inviato"** mostrato al cliente ma nessun SMS parte → vedi A14.
+- [ ] **C12 — Manifest PWA incompleto**: manca il service worker e ci sono solo icone segnaposto. Da completare se si va sulla strada dell'app installabile (B1).
+
+---
+
+## D. Ordine di lavoro proposto
+
+1. **Prima i blocchi** (C1, C2, C3) — finché il salvataggio fallisce, ogni altra modifica è inutile.
+2. **Poi l'agenda**: schermo pieno con tutti gli operatori (A1), calendario mensile fisso (A3), tema chiaro (A9).
+3. **Poi la posa**: campi nel servizio (A4) + buco prenotabile in agenda (A5) + turni reali con colonne oscurate (A8).
+4. **Poi il drag & drop** (A7) e la resa delle sovrapposizioni (A6).
+5. **Poi l'import clienti** (A11) e i Buoni (A10).
+6. **Infine** flusso richiesta/conferma (A14) e messaggi/notifiche (A13), dopo aver deciso B1 e B2.
+7. **Sempre**: giro di test di stabilità prima di ogni consegna al salone (A15).
+
+
+---
+
+## E. Stato dei lavori
+
+Aggiornato dopo il passaggio sul repository `rosy-gestionale-`.
+
+### Fatto e pushato
+
+| # | Cosa |
+|---|------|
+| A1 | Colonne operatori a larghezza uguale, tutte visibili |
+| A2 | Colonna sinistra con Clienti · Prodotti · Buoni e accesso alla dashboard |
+| A3 | Calendario del mese sempre visibile, clic sul giorno |
+| A4 | Tre tempi nel servizio: lavorazione, posa, finitura |
+| A5 | Durante la posa la fascia è libera e prenotabile |
+| A6 | Colonne affiancate calcolate sulle sole lavorazioni |
+| A7 | Appuntamenti trascinabili, con controllo conflitti |
+| A8 | Turni veri: giorni non lavorativi oscurati ma utilizzabili |
+| A9 | Tema chiaro su tutte le pagine |
+| A10 | Sezione Buoni: registro, ricerca per codice, utilizzo anche parziale |
+| A11 | Import clienti da Excel e CSV, con anteprima e controllo doppioni |
+| A12 | Cliente creabile senza telefono ed email |
+| A14 | Richiesta di appuntamento con Conferma / Modifica / Ricontatta / Rifiuta |
+| C1 | Verificato: era una diagnosi sbagliata. Corretti i due salvataggi rotti davvero |
+| C2 | Risolto insieme ad A12 |
+| C4 | L'agenda chiede solo i giorni che servono, non più tutto lo storico |
+| C5 | Via l'orario fisso 9-18 |
+| C6 | La posa non si indovina più dal nome del servizio |
+| C8 | Report con numeri veri |
+| C11 | Tolto il messaggio "ti abbiamo inviato un SMS" che era falso |
+| F1 | Le tre fasi si leggono a colpo d'occhio + avviso di sforamento |
+| F2 | Pulsanti che non rispondevano, giro completo su tutte le pagine |
+
+### ✅ C3 — Regole del database: fatto, e senza server
+
+Si temeva servisse il pezzo lato server. Non serviva: fuori dal salone escono
+due liste ripulite (`vetrina` e `disponibilita`), e gli appuntamenti — con
+dentro nome, cognome e telefono delle clienti — sono chiusi a chiave.
+Pubblicato l'11 settembre 2026 e verificato in linea.
+
+### Bloccate: serve prima il pezzo lato server su Vercel
+
+Tre lavori diversi, **un solo prerequisito**: un endpoint sul server con
+`FIREBASE_SERVICE_ACCOUNT` configurata. Conviene farlo una volta sola.
+
+| # | Cosa | Perché serve il server |
+|---|------|------------------------|
+| A13, C7 | SMS e promemoria | L'invio non si può fare dal browser: la chiave del fornitore sarebbe visibile a tutti |
+| F3 | Buoni pagati online | Make ha bisogno di un indirizzo a cui scrivere il buono |
+| F4 | Acconto sulla prenotazione | Stripe deve confermare il pagamento a un endpoint fidato |
+
+### Ancora aperte, senza prerequisiti
+
+| # | Cosa | Nota |
+|---|------|------|
+| C9 | Prodotti e Automazioni | Oggi sono pagine oneste ma vuote: da decidere cosa ci va dentro |
+| C10, B5 | Backend vecchio con dati finti | In `salone-app/backend` sei file su otto non sono collegati a niente. Da cancellare |
+| — | `fix-gap.js` e `patch.js` in radice | Script usa e getta finiti nel repository per sbaglio |
+| C12 | App installabile | Dipende da B1: si fa quando si parte con le notifiche |
+| A15 | Stabilità | Continuo: giro di prova prima di ogni consegna al salone |
+
+---
+
+## E2. Quanto costa tenerlo acceso (B3)
+
+Budget indicato: intorno ai 100 €, anche 50 € l'anno vanno bene, purché la
+somma non esploda.
+
+### Quello che serve per forza
+
+| Voce | Costo | Note |
+|------|-------|------|
+| Hosting su Vercel | **0 €** | Il piano gratuito basta per un salone. Si paga solo se il sito diventa molto trafficato |
+| Database Firebase | **0 €** fino a ~50.000 letture al giorno | Un salone ne fa qualche centinaio. Oltre la soglia si passa al consumo, ordine di pochi euro l'anno |
+| Dominio | **10-15 € l'anno** | Solo se volete un indirizzo vostro invece di quello di Vercel |
+
+**Totale minimo: 0-15 € l'anno.**
+
+### Quello che si paga a consumo
+
+| Voce | Costo | Con che volumi |
+|------|-------|----------------|
+| SMS (Twilio) | **~0,07 € a messaggio** | 100 promemoria al mese ≈ **7 € al mese, 84 € l'anno** |
+| WhatsApp Business | ~0,04 € a messaggio | Più economico degli SMS ma serve l'approvazione di Meta e i modelli di messaggio |
+| Notifiche dell'app | **0 €** | Solo per chi installa l'app |
+| Stripe (buoni e acconti) | 1,5% + 0,25 € a incasso | Lo pagate già oggi sui buoni |
+
+### Quello che si paga solo se si fa l'app vera
+
+| Voce | Costo |
+|------|-------|
+| Account sviluppatore Apple | **99 $ l'anno** |
+| Account Google Play | 25 $ una tantum |
+
+### In pratica
+
+- **Partendo da sito installabile + SMS solo per i promemoria**: circa **7-10 € al mese**, cioè **85-120 € l'anno**. Dentro il budget.
+- **Se si riducono gli SMS** mandandoli solo il giorno prima e non anche alla prenotazione, si dimezza.
+- **Se le clienti installano l'app**, per loro le notifiche costano zero e gli SMS restano solo per chi non ce l'ha. Più cresce chi la installa, meno si spende.
+- **L'account Apple da 99 $ l'anno si evita** finché restiamo sul sito installabile.
+
+La cosa importante: **non ci sono costi fissi che esplodono**. La parte che cresce
+sono gli SMS, ed è proporzionale ai messaggi mandati, quindi controllabile.
+
+## F. Nuove richieste (giro successivo)
+
+Raccolte dopo la prima consegna, prima del push del codice da Google AI Studio.
+
+### F1 — Lettura delle tempistiche in agenda
+**Priorità: ALTA**
+
+Non è ancora leggibile come serve. Per un parrucchiere le tre fasi vanno distinte a colpo d'occhio:
+
+1. **rettangolo pieno** = prima lavorazione (operatore occupato)
+2. **trattini** = tempo di posa, operatore **libero**, ci si possono fissare altri appuntamenti
+3. **rettangolo pieno** = lavorazione finale
+
+In più: quando si sfora o ci si sovrappone, deve comparire un avviso del tipo
+*«Stai andando fuori tempo, vuoi inserire comunque l'appuntamento?»* con conferma esplicita.
+
+*Stato:* la logica c'è (`lib/servizi.ts` divide lavorazione e posa e la fascia di posa è già prenotabile), ma la resa grafica va rifatta perché si legga davvero. La conferma sulle sovrapposizioni esiste già nella sidebar; manca il caso "fuori orario / fuori turno".
+
+### F2 — Debug dei pulsanti dell'agenda
+**Priorità: ALTA**
+
+Diversi pulsanti non rispondono. Caso segnalato: menù tre puntini → **Completato** e **Modifica** funzionano, **Elimina** no.
+
+*Causa probabile individuata:* il menù si chiude su `onMouseLeave` invece che su clic fuori. "Elimina" non cancella subito, apre la conferma Sì/No: muovendo il mouse verso "Sì" il puntatore esce dal menù, il menù si chiude e sembra che non sia successo niente. Completato e Modifica invece agiscono al primo clic, per questo funzionano.
+*Da fare comunque:* giro completo su tutti i pulsanti dell'agenda, non solo su questo.
+
+### F3 — Buoni SPA / Salone: integrazione del flusso esistente
+**Priorità: da valutare insieme**
+
+Flusso attuale: il cliente paga da un link Stripe dedicato → Make salva i dati del cliente su Google Fogli con un codice univoco → al cliente arriva il PDF → in negozio il controllo si fa a mano.
+
+Da capire se e come portare tutto dentro il gestionale: registro buoni, ricerca per codice, marcatura "usato" al momento dell'uso, collegamento all'appuntamento. Si ragiona con calma, per ora è solo annotato.
+
+### F4 — Web app di prenotazione con acconto
+**Priorità: ALTA (dopo B1/B2)**
+
+Oltre alla prenotazione online che invia la richiesta al gestionale (**A14**), si aggiunge:
+
+- **pagamento anticipato**: una caparra (es. 10 €) sul totale della lavorazione, scalata dal conto finale
+- automazioni collegate: messaggi di richiesta inviata, conferma, promemoria, annullamento
+
+Da decidere insieme a **B1** (app o sito) e **B2** (notifiche o SMS); il pagamento presumibilmente su Stripe, come già fanno per i buoni.
+
+---
+
+## G. Nuova lista (giro 3)
+
+Raccolta dalla chiamata. Ordine di scrittura, non di lavorazione.
+
+### Bug da sistemare
+
+**G1 — Modalità scura rotta, e barre nere per chi ce l'ha attiva** · ✅ FATTO
+Le intestazioni sopra l'agenda, clienti, servizi e operatori appaiono nere ad
+alcuni e normali ad altri. *Causa individuata:* nel raddrizzare i colori ho
+scritto `body { bg-white text-zinc-900 }` fisso, mentre le barre hanno ancora
+le varianti `dark:`. Chi ha il tema scuro salvato nel browser si ritrova barre
+scure su pagina bianca; chi non l'ha mai attivato vede tutto normale — per
+questo Daniele lo vede giusto. Da rifare: modalità chiara e scura entrambe
+funzionanti, con l'interruttore che le cambia davvero.
+
+**G2 — "Vedi chi sono" su Rosie Hub** · ✅ FATTO
+Il pulsante va sistemato.
+
+**G3 — Nome della cliente tagliato** · ✅ FATTO
+Deve vedersi **completo**, e su **tutti i blocchi** dell'appuntamento: se c'è
+colore, posa e piega, il nome sta sia sul colore sia sulla piega. Se non ci
+sta, puntini di sospensione e nome intero al passaggio del mouse.
+
+**G4 — La card balla quando ci passi sopra** · ✅ FATTO
+Adesso si rimpicciolisce e si riassesta. Deve aprirsi completa **senza
+schiacciarsi**, restando alta uguale, e andare in evidenza.
+
+**G5 — Lo zero fisso nei campi numerici** · ✅ FATTO
+Nel servizio, prezzo e minuti partono da `0`: se scrivi 15 diventa `015` e non
+si salva. Lo zero deve sparire appena scrivi, oppure niente numero e un
+segnaposto in grigio.
+
+**G6 — L'aspetto della posa non piace** · ✅ FATTO
+Così com'è non convince: deve dare l'idea di **spazio libero**, non di una
+fascia occupata.
+
+### Agenda: nuove funzioni
+
+**G7 — Spostare i singoli servizi fra operatori** · ✅ FATTO
+*(rivisto in corsa: non si sposta il servizio intero ma la singola **fase** —
+la finitura di un colore può andare a un'altra operatrice, separata dalla
+lavorazione e dalla posa dello stesso servizio.)*
+Colore con un'operatrice e piega con un'altra: si deve poter trascinare **il
+singolo servizio** a destra o a sinistra, non tutto l'appuntamento. Spostando
+di colonna l'orario **non deve cambiare**.
+
+**G8 — Domanda allo spostamento** · ✅ FATTO
+Quando si sposta, comparire un riquadro: *«Lo lasci allo stesso orario o lo
+cambi?»*, e si decide lì.
+
+**G9 — Servizi separati restano legati a vista** · ✅ FATTO
+Se i due servizi finiscono su operatrici diverse i trattini di collegamento
+spariscono: restano **dello stesso colore**, e passando col mouse su uno si
+evidenzia anche l'altro, così si capisce che è la stessa cliente.
+
+**G10 — Effetto sfocatura sul resto al passaggio del mouse** · da decidere
+Idea da valutare, serve un parere.
+
+### Operatori
+
+**G11 — Accesso per le operatrici** · ✅ FATTO
+Ognuna con il suo: indirizzo e password creati dalla titolare in Operatori →
+Accessi. Si entra anche dal telefono.
+
+*Perché così.* Un accesso condiviso non lascia capire chi ha spostato un
+appuntamento, e se si perde un telefono si cambia la password a tutte. Un
+codice del salone con un PIN sarebbe stato più comodo ma finto: le regole del
+database non saprebbero distinguere una persona dall'altra, quindi i permessi
+non varrebbero niente. Con un account vero per ognuna, invece, i permessi
+valgono anche contro chi provasse a girare intorno alla schermata.
+
+**Serve una cosa da fare a mano una volta sola:** accendere Email/Password in
+Firebase → Authentication → Sign-in method, e ripubblicare le regole
+(`firebase deploy --only firestore:rules`).
+
+**G12 — Permessi per operatrice** · ✅ FATTO
+Si spuntano le pagine, o si sceglie una combinazione pronta (solo agenda /
+agenda e clienti / agenda e buoni / tutto tranne i conti). Le pagine negate
+spariscono dal menù e dalle scorciatoie, e non si aprono nemmeno scrivendo
+l'indirizzo a mano.
+
+Il muro vero però sono **le regole del database**: senza permesso non si
+scrive, e sui buoni non si legge nemmeno. Due eccezioni volute: l'anagrafica
+clienti si può **leggere** anche con il solo permesso Agenda (altrimenti sugli
+appuntamenti non comparirebbe il nome della cliente), ma per modificarla serve
+il permesso Clienti; e le impostazioni del salone restano alla titolare e non
+si possono concedere.
+
+Si può anche **sospendere** un accesso senza cancellarlo, e toglierlo del
+tutto quando serve.
+
+**G13 — Servizi che ogni operatrice può fare** · ✅ FATTO
+Non tutte fanno tutto. Terza scheda nella scheda operatore, accanto a turni e
+orari, con l'elenco dei servizi da spuntare e il tasto Salva.
+
+### Clienti e prenotazioni
+
+**G14 — "Ricontatta" che funziona** · ✅ FATTO
+Da computer apre WhatsApp sul numero della cliente. Da telefono propone
+**chiama** oppure **messaggio WhatsApp**.
+
+**G15 — Verifica del numero nella prenotazione online** · ALTA
+Oggi si può prenotare con un numero inventato. Serve un controllo.
+
+**G16 — Messaggio alla cliente quando confermi** · ALTA
+Quando il salone conferma, alla cliente arriva un messaggio.
+
+**G17 — App o sito: decisione** · da decidere
+Obiettivo dichiarato: far spendere meno al cliente.
+
+### Buoni
+
+**G18 — Collegare i buoni pagati online** · ✅ FATTO (import dal foglio)
+Il foglio Google contiene già quanto ha pagato, chi è, e **piega sì / piega
+no** in base all'importo.
+
+*Com'è stato fatto.* In Buoni c'è **Importa dal foglio**: si esporta il foglio
+in CSV (File → Scarica → .csv) e si sceglie il file. Le tredici colonne del
+foglio in uso si riconoscono da sole — Codice Univoco, Nome del beneficiario,
+Pagamento totale, Piega, le due date — e restano correggibili a mano. I buoni
+già in elenco non si duplicano: il confronto è sul codice, ripulito da
+maiuscole e trattini. Si può rifare l'importazione ogni volta: arrivano solo i
+nuovi. *Piega compresa* si vede sulla riga del buono e nella sua scheda.
+
+*Resta da fare quando ci sarà il server:* far scrivere il buono a Make
+nell'istante del pagamento, invece di esportare a mano. Il foglio con le
+automazioni email non va toccato.
+
+### Nuovo
+
+**G19 — Preconto e chiusura dell'appuntamento** · ✅ FATTO (stampa dal browser)
+Non è più solo "stampare un foglio": è **la nuova logica di fine
+appuntamento**, e passa sempre da lì.
+
+La cliente ha finito. In agenda si prende l'appuntamento e si fa
+**Completa appuntamento**. Si aprono due schermate, una dopo l'altra.
+
+*Prima schermata — il preconto.* Arriva con i trattamenti **già spuntati**,
+quelli che erano stati fissati. Si può togliere quello che non è stato fatto,
+aggiungere quello che è stato fatto in più, mettere un appunto. I prezzi sono
+quelli del catalogo, così cambiandoli lì cambiano anche qui. Da qui si stampa
+sulla stampantina.
+
+*Seconda schermata — cosa resta scritto sull'appuntamento.* Subito dopo:
+- **importo totale**, calcolato da solo sui servizi del preconto;
+- **sconto** eventuale;
+- **spesa definitiva**;
+- **colori usati e codici**, e quello che serve in base al servizio;
+- **note che vanno nello storico della cliente**: preferenze, sensibilità,
+  carattere, quello che serve saperlo la volta dopo.
+
+*Com'è stato fatto.* La stampa passa dal browser, così funziona con qualsiasi
+stampante senza dover parlare con un modello in particolare. Il foglio è
+stretto come uno scontrino (72 mm): su una termica esce giusto, su un A4 resta
+una colonna in alto a sinistra. Il conto **resta salvato** sull'appuntamento,
+e da un appuntamento già chiuso si può fare *Rivedi il conto* per correggere.
+
+Da chiarire ancora: che stampantina c'è in salone (se è termica di rete si può
+parlarle direttamente e stampare senza finestra di dialogo), e se serve un
+numero progressivo sul preconto.
+
+**G20 — Rifare la schermata di prenotazione dell'appuntamento** · ALTA
+*Da fare.*
+
+La schermata con cui si prende e si modifica un appuntamento viene da un altro
+gestionale, copiata così com'era. Si vede: non ha lo stesso design del resto di
+Rosy e, soprattutto, **si usa peggio** — i passaggi non sono quelli che il resto
+del programma ha abituato a fare.
+
+Va rifatta da capo, non ritoccata: stessi colori, stessi bottoni, stesse
+distanze delle altre pagine, e i gesti nell'ordine in cui li fa davvero chi sta
+al telefono con la cliente (chi è → che cosa deve fare → con chi → quando).
+Prima di scrivere codice conviene guardarla insieme e dire, punto per punto,
+che cosa dà fastidio: "non mi piace" da solo non basta per rifarla giusta.
+
+---
+
+## Riservato a un salone
+
+**Pagina Buoni — solo RD Salon** · ✅ FATTO
+
+I Buoni sono nati su misura per RD Salon: buoni spa venduti online, il loro
+foglio, la piega compresa secondo l'importo. Agli altri saloni non servono, e
+adesso non li vedono proprio: la voce non compare nel menù, l'indirizzo scritto
+a mano rimanda indietro, e il database rifiuta di leggerli e di scriverli.
+
+L'interruttore è **l'indirizzo del titolare del salone**, non quello di chi sta
+guardando lo schermo: così le operatrici di RD Salon la vedono come la vede lui,
+e un altro salone no. Oggi è acceso per due indirizzi:
+`rdsalon.ceccano@gmail.com` e `danieledesimone.social@gmail.com`.
+
+Sta scritto in due posti, e vanno cambiati tutti e due insieme:
+- `salone-app/frontend/lib/funzioni.ts` — toglie la voce dal menù;
+- `firestore.rules`, funzione `haIBuoni` — è la serratura vera.
+
+Per accendere i Buoni a un altro salone: aggiungere il suo indirizzo in tutti e
+due gli elenchi e ripubblicare le regole. Quando i saloni saranno tanti, questo
+elenco diventa un campo sulla scheda del salone (`funzioni`), che si accende
+dalla console senza toccare il codice — è la *strada A* di cui abbiamo parlato.
+
+---
+
+## Fatto in questo giro
+
+**Chi prenota online diventa una cliente vera** · ✅ FATTO
+Prima nome e telefono restavano attaccati all'appuntamento e basta: niente
+scheda, niente storico, e la rubrica non cresceva mai. Ora, quando il salone
+**conferma** la richiesta, la cliente entra in anagrafica. Se c'era già — stesso
+numero, oppure stesso nome e cognome — ci si aggancia invece di fare un
+doppione, e se prenotando ha lasciato un contatto che in scheda mancava, quello
+si aggiunge. L'appuntamento resta collegato alla scheda, quindi storico e
+*Ricontatta* funzionano come per tutte le altre. Il canale di acquisizione
+risulta "Prenotazione online".
+
+Se la creazione della scheda fallisce, l'appuntamento resta confermato lo
+stesso e compare un avviso: l'agenda viene prima.
+
+**Più servizi nella stessa prenotazione** · ✅ FATTO
+Colore e piega si prendono insieme. Gli orari liberi si calcolano sulla
+**somma** delle durate, così non si offre un buco in cui ci sta solo il primo;
+fra le operatrici restano quelle che sanno fare **tutti** i servizi scelti;
+l'appuntamento nasce con una riga per servizio, come se li avesse segnati il
+salone. Nel riepilogo si vedono uno per riga con il loro prezzo, e in fondo il
+totale.
+
+**I campi del vecchio gestionale** · ✅ FATTO
+Sesso, data di nascita, stato di accettazione, prenotazioni fatte, cliente dal,
+note sugli appuntamenti. Tutti **facoltativi**, dentro una sezione *Altri dati*
+che sta chiusa: chi aggiunge una cliente al volo continua a vedere quattro
+caselle. In scheda si vedono solo quelli riempiti.
+
+Le colonne del foglio che non hanno una casella loro **non si buttano**:
+finiscono sotto *Dal vecchio gestionale*, con il nome che avevano nel file.
+Meglio un dato scritto male che un dato perso.
+
+L'importazione riconosce da sola le colonne nuove, rimette insieme la data di
+nascita anche quando è spezzata in giorno e mese, e legge le date sia
+all'italiana sia all'americana.
+
+**La finestrella del nuovo cliente scorre come deve** · ✅ FATTO
+Intestazione e bottoni restano fermi, scorre solo il centro, e la pagina sotto
+è bloccata finché la finestrella è aperta — era quello a far sembrare che non
+scorresse niente.
+
+---
+
+## In sospeso — nell'ordine in cui conviene farle
+
+**1. Messaggi automatici** · ✅ SCRITTO, aspetta le chiavi su Vercel
+Alla conferma della richiesta parte l'email alla cliente, da sola. Il testo
+dice quando, che cosa e con chi, e ricorda di avvisare se non può venire.
+
+Il codice c'è tutto: `api/messaggi.ts` (chi chiama deve dimostrare chi è, e
+l'appuntamento dev'essere del suo salone), `api/_messaggi.ts` (il testo, in
+email e in testo semplice — lo stesso che servirà per l'SMS). Quello che parte
+resta segnato sull'appuntamento, sotto `messaggi`, così non si manda due volte
+e si capisce perché una cliente dice che non le è arrivato niente.
+
+**Manca solo la configurazione**, ed è in mano al titolare:
+`FIREBASE_SERVICE_ACCOUNT`, `RESEND_API_KEY` e `MITTENTE_EMAIL` su Vercel.
+Passo per passo in `docs/SERVER-SU-VERCEL.md`. Finché non ci sono, l'agenda
+dice chiaramente che il messaggio non è partito e perché, e si avvisa a mano
+con *Ricontatta*.
+
+**Due canali, non uno.** Si prova sia l'SMS sia l'email, e basta che ne arrivi
+uno. L'SMS passa da **Skebby**: nessun telefono da tenere acceso, si paga a
+messaggio, e il mittente è scritto a lettere — "RD SALON". Resta possibile, per
+quando i messaggi diventano tanti, farlo partire da un Android in salone a
+costo zero: si cambiano due variabili su Vercel, il codice è lo stesso.
+L'email è rimandata finché non si possono toccare i DNS di `rdsalon.com`.
+
+**Il testo dell'SMS è scritto apposta.** Un SMS si paga a pezzi da 160
+caratteri, e basta un trattino lungo o un'emoji perché diventino da 70: lo
+stesso messaggio può costare 1 credito o 3. Quindi l'SMS non è l'email
+accorciata, è un'altra frase — 127 caratteri, un credito. Se il nome del salone
+o i servizi fanno sforare, il programma lascia per strada da solo il superfluo
+(prima il telefono, poi l'operatrice, poi accorcia i servizi), ma quando e chi
+manda non si perdono mai.
+
+Le parole stanno in `salone-app/frontend/lib/messaggi.ts`, non nel server,
+perché servono anche al programma: il tasto **Ricontatta** su una richiesta
+apre WhatsApp con **la stessa identica conferma** già scritta. Così, anche a
+server spento, si avvisa con un tocco e la cliente legge sempre la stessa cosa.
+
+**Il promemoria del giorno prima** · ✅ SCRITTO, aspetta le chiavi
+Ogni giorno a mezzogiorno Vercel fa partire `/api/promemoria`, che trova gli
+appuntamenti **confermati** di domani e manda a ciascuna cliente il
+promemoria. "Domani" è quello del calendario del salone, non del server (che
+vive in UTC). Non partono mai due volte, non partono per le richieste in
+attesa né per le pause, e non partono a chi ha ricevuto la conferma da meno di
+dodici ore. È protetto da `CRON_SECRET`.
+
+**Il postino è un tablet Android in salone** con una SIM a messaggi illimitati
+e l'app *SMS Gateway for Android*: zero a messaggio. Skebby resta come
+alternativa senza hardware (~9 centesimi a SMS).
+
+**I messaggi partono solo per RD Salon** (`messaggi_automatici` in
+`lib/funzioni.ts`): il tablet è loro, e un altro salone che usa il gestionale
+non deve mandare SMS dal loro numero.
+
+**Corretto un errore mio prima che facesse danni:** le ore nei messaggi
+venivano dall'orologio del server, che vive in UTC. Un appuntamento alle 15:30
+sarebbe arrivato alla cliente come "13:30". Ora si scrive l'ora del salone
+(`FUSO_SALONE` in `lib/messaggi.ts`), e le prove sono scritte con il fuso
+esplicito così non dipendono più dal computer su cui girano.
+
+**2. G20 — Rifare la schermata di prenotazione** (quella interna)
+Viene da un altro gestionale e si usa peggio del resto.
+
+**3. Pagina di prenotazione pubblica: design e web app**
+Ha ancora i colori di un altro programma. E il `manifest.json` è quello di
+esempio: sistemandolo, la cliente si mette l'icona del salone sulla schermata
+Home del telefono.
+
+**4. G15 — Verifica del numero di telefono** · serve la chiave su Vercel
+Oggi si può prenotare con un numero inventato.
+
+**5. Storico clienti dal vecchio gestionale**
+I dati anagrafici entrano. Lo storico degli appuntamenti no: serve vedere in
+che forma Treatwell lo esporta.
+
+
+---
+
+## Fatto il 30 settembre
+
+**Numero progressivo sul preconto** · ✅
+"Preconto N. 12/2026", per salone e per anno. Lo dà il server dentro una
+transazione: due stampe insieme non prendono lo stesso numero, e ristampare
+lo stesso conto non ne consuma uno nuovo. Se il server non risponde si stampa
+lo stesso, senza numero, con un avviso.
+
+**Verifica del numero con codice SMS (G15)** · ✅
+Chi prenota dal sito riceve un codice di 6 cifre e lo scrive. La prenotazione
+la crea il server, e solo se il codice è giusto; nelle regole la porta per
+scrivere dal browser è chiusa. Limiti: 10 minuti, 5 tentativi, un codice al
+minuto, 5 all'ora per numero, 40 all'ora per salone. Se il tablet è spento la
+cliente prenota lo stesso e in agenda compare "numero non verificato".
+
+**Pagina di prenotazione pubblica rifatta, e web app** · ✅
+Stile del gestionale, niente schermata di benvenuto, quattro passi con la
+barra in fondo che dice che cosa si è scelto. Si aggiunge alla schermata Home
+e si apre come un'app sulla prenotazione del salone (manifest per salone,
+icone nuove).
+
+**G20 — Pannello "Nuovo appuntamento"** · ✅ prima passata
+Era la copia di un altro programma, e si vedeva:
+- l'ordine era data → ora → operatrice → cliente → servizi. Ora è **cliente →
+  servizi → quando e con chi**, come si chiede al telefono (data, ora e
+  operatrice sono già scritte, il pannello si apre dal buco in agenda);
+- scritte da 10-11 pixel in maiuscoletto: ora sono della misura del resto;
+- colori rimasti dal tema scuro dell'altro programma: fucsia chiaro su bianco
+  che non si leggeva, e classi inesistenti che non facevano niente;
+- nessun riepilogo: ora in fondo c'è **10:00–11:45 · 1 h 45 min · 65,00 €**
+  prima di salvare;
+- le note stavano dietro un link: ora si vedono subito;
+- "Filtro Telefono" come etichetta del telefono, "Cliente occasionale (senza
+  appuntamento)" dentro un appuntamento, un'icona che girava: sistemati.
+
+Da provare in salone: se c'è ancora qualcosa di scomodo, adesso è più facile
+vederlo.
+
+## In sospeso
+
+- **Email** — aspetta l'accesso ai DNS di rdsalon.com
+- **WhatsApp Business** — fermo finché non lo decide il titolare
+- **Stampantina** — che modello è, per la stampa diretta
+
+
+## Fatto il 1° ottobre
+
+**SMS per ogni salone** · tolto
+La scheda Impostazioni → SMS è stata tolta: gli SMS funzionavano già con il
+gettone su Vercel, e restano così.
+
+**Import da Treatwell: le note** · ✅
+Si perdevano note sugli appuntamenti, sesso, nascita e colonne in più: l'import
+salvava solo nome, telefono, email e note. Ora si salva tutto. Le clienti già
+presenti si completano con quello che manca, senza toccare il resto: basta
+reimportare lo stesso file. Le note possono arrivare a 5000 caratteri
+(**ripubblicare le regole di Firestore**).
+
+**Buoni** · ✅
+- Spa e Salone in due schede separate, ognuna con i suoi totali.
+- Chi lo regala (nome, telefono, email) e per chi è. I buoni importati prima
+  avevano chi paga nelle note: si rileggono da lì, senza correggerli a mano.
+- Filtro Online / In salone. I buoni dal foglio contano come online.
+- Buono spa a prezzo fisso: 50 €, 70 € con la spunta della piega.
+- Nessun messaggio automatico per i buoni: li gestisce il negozio.
+
+**Buoni online in automatico** · ✅
+Niente da cambiare su Make: il gestionale legge da solo il foglio Google che
+Make già riempie: la scheda spa va ai Buoni Spa, quella del salone ai Buoni
+Salone. La pagina è in diretta e ricontrolla il foglio ogni 2 minuti.
+L'elenco è una tabella: Online / Fatti in salone, poi Attivi / Scaduti /
+Usati, con solo chi l'ha comprato, chi lo usa, scadenza, piega e prezzo. Il
+codice si vede cliccando, insieme a "Segna come usato". Vedi
+`SERVER-SU-VERCEL.md`, sezione "Buoni online letti dal foglio Google".
+
+## 5 ottobre — sul ramo `production`, da portare su `main` quando si dice
+
+- **Cognome facoltativo** per i collaboratori: basta il nome, ovunque (pallino
+  con una sola iniziale, niente spazi in fondo).
+- **Ordina colonne**: pulsante nel calendario e nella pagina Operatori. Si
+  trascina o si usano le frecce; l'ordine (`ordine` sulla scheda) vale per
+  calendario, "Nuovo appuntamento" e prenotazione online. I nuovi vanno in
+  fondo. Il colore di ognuno ora segue la persona, non la colonna.
+- **Via la colonna "Non assegnato"**: se un appuntamento non ha operatore,
+  compare una riga gialla sopra il calendario per assegnarlo.
+- **Appuntamenti più bassi**: 84 pixel l'ora invece di 120.
+- **Buoni a 6 mesi**: la scadenza non si sceglie più, è 6 mesi dal rilascio
+  (fine mese se il giorno non esiste). Vale anche per i buoni già registrati.
+
+## 6 ottobre — sul ramo `production`
+
+- Linea verde dell'ora attuale a tutta larghezza, al centro all'apertura.
+- SMS: ricevuta, conferma, non disponibile, promemoria 24 ore e 1 ora prima,
+  avviso al salone per ogni richiesta online (cellulare in Impostazioni).
+  Appuntamento fissato dal salone: casella "Avvisa la cliente con SMS".
+- Promemoria ogni 15 minuti con cron-job.org (vedi SERVER-SU-VERCEL.md).
+- Agenda in diretta, "(N) Rosy" nel titolo, Registro SMS in Automazioni con
+  SMS di prova, avviso rosso in agenda per gli SMS non partiti.
+- Import clienti: sovrascrivi / completa / lascia le già presenti.
+- Nuovo appuntamento: ultima volta della cliente con "Ripeti".
+- **Da fare**: ripubblicare le regole di Firestore; creare il cron su
+  cron-job.org; poi nascondere anche la barra in alto insieme al pannello
+  laterale (quando il cliente conferma che il resto funziona).
+
+## 7 ottobre
+- "Modifica" riempie sempre il pannello (anche riaprendo lo stesso
+  appuntamento); prezzi dal listino.
+- Richiesta online modificata e salvata = confermata: rubrica + SMS.
+- SMS "appuntamento spostato": dal pannello Modifica (spunta) e dal
+  trascinamento (parte dopo 8 secondi, con "Non avvisare"). Spostando
+  l'orario, i promemoria 24 ore / 1 ora ripartono sull'orario nuovo.
+- SMS di cambio orario riscritto: "purtroppo abbiamo dovuto cambiare il tuo
+  appuntamento a … Grazie per la disponibilità, ti aspettiamo in salone!".
+  Parte anche quando una richiesta online viene confermata con "Modifica" a
+  un orario diverso da quello chiesto (prima partiva un semplice "confermato").
+- **Rosy IA (Gemini)**: la chat in basso a destra legge agenda, clienti
+  (note, ultima visita), orari liberi, listino e operatrici. Può preparare un
+  appuntamento: compare una scheda con **Conferma** / **Scarta**, e si salva
+  solo premendo Conferma (con SMS di conferma, se spuntato). Non cancella e
+  non sposta niente. Serve `GEMINI_API_KEY` su Vercel (facoltativo
+  `GEMINI_MODEL`). Il server è `api/rosy.ts`, il cervello `api/_rosy.ts`,
+  le prove `npm run prova:rosy`.
+- Rosy più veloce: modello `gemini-3.8-flash` (il 2.5 non è più dato agli
+  account nuovi) con ragionamento al minimo; il modello che funziona resta
+  ricordato; all'apertura della chat il server si prepara (listino,
+  operatrici, rubrica); operatrici, listino e agenda di oggi e domani sono già
+  nelle istruzioni, così le domande comuni si risolvono in un giro solo.
+- **Rosy: riserve gratuite e riservatezza.** Se Gemini è sovraccarico, ha
+  finito le domande gratuite o non risponde, Rosy passa a **Groq** e poi a
+  **OpenRouter** (modello di base `gpt-oss-120b` di OpenAI, aperto). Si
+  accendono mettendo `GROQ_API_KEY` / `OPENROUTER_API_KEY` su Vercel; i
+  modelli si cambiano con `GROQ_MODEL` / `OPENROUTER_MODEL`. `/api/salute`
+  dice se funzionano (`rosy_ia_riserve`).
+  All'IA non arrivano più telefoni, email e note delle clienti: nella chat i
+  numeri diventano "[telefono 1]" e il gestionale rimette quelli veri dopo.
+- Rosy, "Apri scheda": quando Rosy trova una cliente (anche se le si chiede
+  il numero o le note, che per riservatezza non vede), sotto la risposta
+  compare il pulsante "Apri scheda di …" (al massimo 3) che porta alla scheda
+  vera. Il pulsante lo mette il gestionale, non l'IA.
+
+## 12 ottobre
+- **Spostare un solo servizio** (richiesta di Daniele): in un appuntamento con
+  più servizi, trascinare un servizio più in alto o più in basso nella stessa
+  colonna sposta solo quello; gli altri restano dove sono. Ogni servizio
+  spostato ha il suo orario (`inizio_minuti` sulla riga). Se si sposta il
+  primo, o se ne porta uno prima di tutti, cambia l'ora d'inizio e parte
+  l'SMS del cambio d'orario; altrimenti nessun SMS. "Modifica" rimette i
+  servizi in fila.
+- **GDPR.** Prenotazione online: spunta obbligatoria "Ho letto l'informativa
+  privacy" (con link) e spunta facoltativa per offerte e novità. Il server
+  rifiuta le prenotazioni senza la prima e salva sull'appuntamento
+  `consensi` (data del server, versione dell'informativa, scelta sulle
+  offerte); confermando la richiesta i consensi passano nella scheda cliente
+  (una spunta vuota non toglie un consenso già dato). Informativa pubblica su
+  `/<salone>/privacy` (testo in `lib/privacy.ts`, BOZZA da far controllare),
+  riempita con i dati di Impostazioni → "Dati legali e privacy" (ragione
+  sociale, partita IVA, email privacy). Nella scheda cliente: sezione Privacy,
+  consenso alle offerte modificabile da "Modifica". Il segnaposto delle note
+  non chiede più le allergie.
+  **Da fare:** compilare i dati legali in Impostazioni.
+- **Pulsante del menu a schermo pieno:** non più "Menu" in basso a sinistra,
+  ma un quadratino con le tre linee in alto a sinistra. In agenda sta nella
+  riga di Giorno / Sett. / Mese (largo come la colonna degli orari); nelle
+  altre pagine è fisso in alto a sinistra e il contenuto gli lascia spazio.
+- **Prenotazione online: pagina di benvenuto.** Prima dei passi c'è una
+  schermata con logo, nome del salone, "Ti diamo il benvenuto! Grazie per
+  averci scelto…", via (apre Google Maps), telefono (chiama), descrizione
+  del salone e il pulsante "Prenota ora". Tutto da Impostazioni.
+
+## 14 ottobre
+- **prenota.rdsalon.com.** Un indirizzo tutto del salone apre subito la sua
+  prenotazione (e `/privacy` la sua informativa). Si configura su Vercel:
+  1. Settings → Domains → aggiungi `prenota.rdsalon.com` e crea il record
+     DNS che Vercel indica (CNAME `prenota`);
+  2. Settings → Environment Variables → `VITE_DOMINI_PRENOTAZIONE` =
+     `prenota.rdsalon.com=<codice salone>` (più indirizzi separati da
+     virgola), poi Redeploy.
+  "Condividi prenotazione" e il link in Impostazioni copiano allora
+  `https://prenota.rdsalon.com`. Logica in `lib/domini.ts`.
+- **Caricamento più veloce.** Il programma non è più un file unico da 1,7 MB:
+  `src/main.tsx` sceglie fra la parte pubblica (`src/Pubblico.tsx`:
+  prenotazione e informativa) e il gestionale (`src/App.tsx`), e ogni
+  pagina del gestionale si scarica quando la si apre (React.lazy).
+  React e Firebase stanno in file a sé (vite.config.ts). La prenotazione
+  scarica ~212 KB compressi invece di ~474. I file in /assets restano in
+  memoria nel browser per un anno (hanno un nome nuovo a ogni versione);
+  se dopo una pubblicazione un pezzo vecchio non c'è più, la pagina si
+  ricarica da sola una volta (`lib/caricaPezzo.ts`). Il benvenuto compare
+  appena arriva la scheda del salone, listino e orari arrivano dopo.
+- **WhatsApp nel benvenuto:** "Scrivici su WhatsApp" con il numero di
+  Impostazioni → "WhatsApp del salone" (se vuoto, il telefono del salone
+  solo se è un cellulare).
+
+## 19 ottobre
+- **SMS: nuovo tentativo automatico, senza doppioni.** Se Traccar (o il
+  telefono-ponte) risponde 502/503/504, o la connessione non parte proprio
+  (server non trovato, connessione rifiutata), l'SMS si riprova dopo 2 e
+  dopo 5 secondi. Con un 500 generico o una connessione caduta a metà NON
+  si riprova: il messaggio potrebbe essere partito. Nel registro, l'errore
+  dice "dopo 3 tentativi". Caso tipico: il 13/10 alle 14:59 Traccar non
+  rispondeva e due SMS non sono partiti.
+
+## 21 ottobre — OTP della prenotazione online
+- **Solo cellulari giusti:** per l'Italia esattamente 10 cifre che iniziano
+  con 3 (spazi, +39, 0039, trattini vanno bene); un fisso o una cifra in
+  più/meno viene rifiutato subito con il motivo sotto il campo, e anche il
+  server lo rifiuta. Stranieri solo col prefisso (+41…). `cellulareValido`
+  in `lib/contatti.ts`.
+- **Codici nel Registro SMS** come "Codice di verifica", partiti o no, col
+  motivo; il codice non si scrive mai.
+- **Codice che non arriva:** dopo 90 secondi dall'ultimo invio compare
+  "Invia lo stesso la richiesta" (più "oppure chiamaci"); la regola dei 90"
+  la controlla il server (`puoSaltareCodice`), la richiesta arriva come
+  "numero non verificato".
+- **Sul tablet:** togliere Traccar da risparmio/ottimizzazione batteria e,
+  se Android avvisa che "sta inviando molti SMS", scegliere Consenti sempre.
+
+## 10 novembre — sul ramo di lavoro, da provare prima di pubblicare
+- **Paracadute.** Un errore non lascia più lo schermo bianco: si ferma solo
+  il riquadro o la pagina che si è rotta, il resto del gestionale continua.
+  Se cade tutto il programma, o non parte proprio, una schermata lo dice e
+  manda al gestionale di riserva. I problemi restano annotati sul computer
+  (Impostazioni → Stato del sistema).
+- **Gestionale di riserva.** Ramo `stabile` = ultima versione collaudata, da
+  pubblicare su un secondo progetto Vercel: stesso database, stessi dati.
+  **Da fare, una volta sola:** i quattro passi di `docs/RISERVA.md`
+  (secondo progetto Vercel, dominio autorizzato su Firebase, due variabili).
+- **Stato del sistema** in Impostazioni: spie verde / gialla / rossa per
+  server, Rosy IA, SMS, promemoria e riserva, con scritto che cosa manca e
+  il tasto "Copia per l'assistenza".
+- **Report senza fatica.** In cima al Report c'è il Riepilogo: Oggi / Ieri /
+  Settimana / Mese. Si calcola da solo dall'agenda. Gli appuntamenti chiusi
+  con il conto valgono l'incasso vero; quelli passati e non chiusi valgono il
+  listino, segnati con ≈ (stima); quelli ancora da fare sono il "previsto".
+  Per operatrice, clienti nuove, e che cosa c'è in agenda domani. La stima
+  compare anche nel grafico dei mesi e nei totali per operatore, in chiaro,
+  senza toccare l'incassato vero. Non si scrive niente sul database.
+  Logica in `lib/riepilogo.ts`, prove `npm run prova:riepilogo`.
+- **Consigliato, su Firebase:** piano Blaze con avviso di spesa (finito il
+  limite gratuito il gestionale resta fermo fino al mattino dopo, riserva
+  compresa) e backup automatici. Vedi `docs/RISERVA.md`.
+- **Da capire:** perché Rosy IA dà errore in salone. Si legge in
+  Impostazioni → Stato del sistema, appena questa versione è pubblicata.
+
+## 11 novembre — giro sul telefono (stesso ramo di lavoro)
+Controllate tutte le pagine a misura di telefono (390 e 320 pixel).
+- **Clienti:** la tabella si tagliava e la freccia per aprire la scheda
+  finiva fuori dallo schermo. Sul telefono ora è un elenco: si tocca la riga.
+- **Servizi:** Modifica ed Elimina erano fuori dallo schermo. Sul telefono
+  ogni servizio è una riga con prezzo, durata e i due tasti.
+- **Agenda:** ogni operatrice ha una colonna larga abbastanza da leggere; se
+  non stanno tutte si scorre di lato, e la colonna degli orari resta ferma.
+  L'intestazione non resta più attaccata in alto (copriva i nomi). Nella
+  vista mese spariscono le scritte "Libero / Schedulati", che non ci stavano.
+- **Scheda cliente:** "Cliente dal Invalid Date" → "Cliente da ottobre 2025"
+  (si leggeva il campo sbagliato; valeva anche da computer).
+- **Report:** le percentuali dei canali superavano il 100% (erano divise per
+  le sole clienti nuove del mese); ora sono sul totale.
+- **Barra dei pulsanti in basso:** una riga sola, non più due o tre.
+- **Linguette** di Operatori e Impostazioni: stanno nello schermo.
+- **iPhone:** le caselle si scrivono a 16 px (Safari non ingrandisce più la
+  pagina a ogni tocco) e l'altezza è quella vera dello schermo (`dvh`: la
+  barra di Safari non copre più il fondo). **Da provare su un iPhone vero.**
+- Da computer non cambia niente: stesse tabelle, stessa agenda.
+- **Restano:** la tabella "Turni e orari" sul telefono si scorre di lato; gli
+  appuntamenti sul telefono non si trascinano (si spostano da Modifica).
+
+## 11 novembre — agenda sul telefono, rifatta (stesso ramo di lavoro)
+La versione "colonne che si scorrono di lato" non convinceva: sul telefono
+l'agenda adesso è fatta come i calendari che si usano ogni giorno. **Solo
+sotto i 768 pixel**: da computer intestazione, avvisi e colonne sono quelli
+di sempre.
+- **In alto:** il mese (si tocca e si apre il calendario del mese), il tasto
+  con il numero di oggi, Giorno / Sett. / Mese.
+- **Striscia della settimana:** si tocca un giorno; strisciando si cambia
+  settimana. Strisciando sul calendario si passa al giorno prima o dopo.
+- **Pallini delle operatrici:** "Tutte" le mostra affiancate; toccando un
+  nome si vede solo lei, a tutto schermo. Vale anche per settimana e mese.
+- **Avvisi piccoli in alto:** richieste dal sito, SMS non partiti,
+  appuntamenti senza operatrice. Si toccano e si apre il dettaglio. (Prima,
+  sul telefono, le richieste dal sito dall'agenda non si raggiungevano.)
+- **Il calendario** riempie lo schermo fino in fondo e scorre solo lui.
+- **+ tondo** in basso a destra per il nuovo appuntamento (se si sta
+  guardando un'operatrice, nasce già per lei).
+- **Settimana:** un elenco dei sette giorni con i soli appuntamenti, invece
+  della griglia ora per ora ripetuta sette volte.
+- File: `agenda/BarraTelefono.tsx`, `lib/telefono.ts`; in `agenda/page.tsx`
+  le parti per il telefono sono segnate `md:hidden` / `max-md:`.
+
