@@ -6,7 +6,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
 import { componi, mandaEmail, mandaSms, TipoMessaggio, EsitoInvio, Messaggio } from './_messaggi';
-import { funzioneAccesa } from '../salone-app/frontend/lib/funzioni';
+import { smsDelSalone } from './_conto-sms';
 import { avvisoNuovaRichiesta, giornoDelSalone } from '../salone-app/frontend/lib/messaggi';
 import { numeroInternazionale } from '../salone-app/frontend/lib/contatti';
 
@@ -82,8 +82,9 @@ export async function mandaPerAppuntamento(
   memoria?: Map<string, any>
 ): Promise<RisultatoInvio> {
   const scheda = await schedaSalone(db, app.userId, memoria);
-  if (!funzioneAccesa('messaggi_automatici', scheda.ownerEmail)) {
-    return { mandato: false, canali: [], a: [], motivo: 'i messaggi automatici non sono attivi per questo salone.' };
+  const postino = await smsDelSalone(db, app.userId, scheda.ownerEmail);
+  if (!postino.attivi) {
+    return { mandato: false, canali: [], a: [], motivo: postino.motivo || 'i messaggi automatici non sono attivi per questo salone.' };
   }
 
   let telefono = (app.clienti?.telefono || '').trim();
@@ -112,7 +113,7 @@ export async function mandaPerAppuntamento(
 
   // Si prova su tutte e due le strade: basta che ne arrivi una.
   const esiti: EsitoInvio[] = await Promise.all([
-    mandaSms(telefono, messaggio),
+    mandaSms(telefono, messaggio, postino.conto),
     mandaEmail(email, messaggio)
   ]);
 
@@ -172,8 +173,9 @@ export async function mandaPerAppuntamento(
  */
 export async function mandaAvvisoSalone(db: Firestore, appuntamentoId: string, app: any): Promise<RisultatoInvio> {
   const scheda = await schedaSalone(db, app.userId);
-  if (!funzioneAccesa('messaggi_automatici', scheda.ownerEmail)) {
-    return { mandato: false, canali: [], a: [], motivo: 'i messaggi automatici non sono attivi per questo salone.' };
+  const contoSms = await smsDelSalone(db, app.userId, scheda.ownerEmail);
+  if (!contoSms.attivi) {
+    return { mandato: false, canali: [], a: [], motivo: contoSms.motivo || 'i messaggi automatici non sono attivi per questo salone.' };
   }
   const privato = (await db.collection('impostazioni_private').doc(app.userId).get()).data() as any;
   const numero = (privato?.telefono_avvisi || '').trim();
@@ -187,7 +189,7 @@ export async function mandaAvvisoSalone(db: Firestore, appuntamentoId: string, a
     telefonoCliente: app.clienti?.telefono || ''
   });
   const messaggio = { oggetto: '', testo, html: '', sms: testo } as Messaggio;
-  const esito = await mandaSms(numero, messaggio);
+  const esito = await mandaSms(numero, messaggio, contoSms.conto);
 
   await registra(db, {
     userId: app.userId,

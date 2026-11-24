@@ -2,9 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { X, Send, Loader2, MessageCircle, CheckCircle2, AlertTriangle, ShieldCheck } from 'lucide-react';
-import { messaggiApi, salonApi } from '@/lib/api-client';
-import { funzioneAccesa } from '@/lib/funzioni';
-import { sessioneCorrente } from '@/lib/sessione';
+import { messaggiApi, salonApi, smsApi } from '@/lib/api-client';
 import { linkWhatsApp, numeroInternazionale } from '@/lib/contatti';
 import { daQuanto } from '@/lib/tempo';
 import { TESTO_RECUPERO, LUNGHEZZA_MASSIMA, haConsensoMarketing, testoPer, erroreTesto } from '@/lib/recupero';
@@ -24,7 +22,9 @@ type Esito = { stato: 'invio' | 'mandato' | 'errore'; motivo?: string };
  * al marketing; le altre si possono ricontattare a mano, una per una.
  */
 export default function InviaRecupero({ righe, onClose }: { righe: Riga[]; onClose: () => void }) {
-  const smsAttivi = funzioneAccesa('messaggi_automatici', sessioneCorrente()?.emailSalone);
+  // Con il conto SMS del salone collegato si mandano SMS; senza, WhatsApp.
+  const [smsAttivi, setSmsAttivi] = useState(false);
+  useEffect(() => { smsApi.stato().then(s => setSmsAttivi(s.attivi)).catch(() => setSmsAttivi(false)); }, []);
   const [nomeSalone, setNomeSalone] = useState('il salone');
   const [testo, setTesto] = useState(TESTO_RECUPERO);
   const [esiti, setEsiti] = useState<Record<string, Esito>>({});

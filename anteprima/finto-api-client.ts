@@ -497,3 +497,16 @@ export const adminApi = {
   attiva: async (id: string, piano: string, _mesi: number, nota = '') => { const s = iscritti.find(x => x.id === id); if (s) Object.assign(s, { piano, in_prova: false, scaduto: false, nota }); },
   togli: async (id: string) => { const s = iscritti.find(x => x.id === id); if (s) Object.assign(s, { piano: null, scaduto: true }); },
 };
+
+// Il conto SMS del salone, finto: si collega con qualunque password tranne "sbagliata".
+let contoSmsFinto: any = null;
+export const smsApi = {
+  stato: async () => eco({ attivi: !!contoSmsFinto, motivo: contoSmsFinto ? '' : 'il salone non ha ancora collegato un conto SMS (pagina Automazioni).', collegato: !!contoSmsFinto, utente: contoSmsFinto ? 'sa•••@salone-demo.it' : '', mittente: contoSmsFinto?.mittente || '', crediti: contoSmsFinto ? 412 : null, problema: '' }),
+  collega: async (_u: string, password: string, mittente: string) => {
+    await new Promise(r => setTimeout(r, 500));
+    if (password === 'sbagliata') throw new Error('Utente o password di Skebby non corretti.');
+    contoSmsFinto = { mittente };
+    return { crediti: 412 };
+  },
+  scollega: async () => { contoSmsFinto = null; },
+};

@@ -57,16 +57,25 @@ Piani e prezzi stanno in `salone-app/frontend/lib/piani.ts`; i giorni di
 prova anche in `firestore.rules` (funzione `inProva`): se li cambi, cambiali
 in tutti e due i posti.
 
-## 5. Che cosa manca ancora (in ordine)
+## 5. Gli SMS: li paga il salone
+
+Rosy non anticipa gli SMS di nessuno. Ogni salone, dalla pagina
+**Automazioni → Conto SMS del salone**, collega il suo conto Skebby (utente e
+password) e compra lì i suoi crediti: conferme, promemoria e codici di
+verifica partono da quel conto, col suo nome come mittente.
+
+Perché funzioni serve una variabile sul server: `SEGRETO_CONTI_SMS`, una
+frase lunga a tua scelta (almeno 16 caratteri). Con quella il server cifra le
+password dei conti prima di salvarle. **Non cambiarla dopo**: le password già
+salvate non si aprirebbero più e i saloni dovrebbero ricollegare il conto.
+
+Senza conto collegato gli SMS non partono e il salone usa WhatsApp a mano.
+
+## 6. Che cosa manca ancora (in ordine)
 
 - **Pagamenti con carta (Stripe)** e fattura elettronica: servono partita IVA
   e account. Il punto dove agganciarli è `api/admin.ts` (oggi l'unico che
   scrive `abbonamenti/{salone}`).
-- **SMS per ogni salone**: oggi sono spenti (`SALONI_CON_SMS` vuoto). Va
-  aggiunto il conto SMS del singolo salone (Skebby), così li paga lui.
-- **Blocco totale a prova finita anche nel database**: oggi le funzioni Pro
-  sono chiuse dalle regole, l'IA e la prenotazione online dal server; agenda
-  e clienti sono fermate dalla schermata. Con i pagamenti va chiuso anche lì.
 - **Termini di servizio e privacy del prodotto**, pagina di presentazione.
 
 ## Provare senza Firebase

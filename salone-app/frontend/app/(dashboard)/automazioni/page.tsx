@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Zap, MessageSquare, CheckCircle2, AlertTriangle, Send, X, Clock, Bell } from 'lucide-react';
 import { registroSmsApi, VoceRegistroSms } from '@/lib/api-client';
+import ContoSms from '@/components/ContoSms';
 import { NOME_MESSAGGIO } from '@/lib/messaggi';
 
 const PERCORSO = [
@@ -76,6 +77,8 @@ export default function AutomazioniPage() {
         </h1>
         <p className="text-zinc-500 mt-1 text-sm">I messaggi che partono da soli, e il registro di ogni SMS.</p>
       </header>
+
+      <ContoSms />
 
       {/* Il percorso dei messaggi, in sola lettura */}
       <section className="mb-8">

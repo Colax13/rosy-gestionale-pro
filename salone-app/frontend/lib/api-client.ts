@@ -1269,3 +1269,39 @@ export const adminApi = {
   attiva: async (salonId: string, piano: string, mesi: number, nota = ''): Promise<void> => { await chiamaAdmin({ azione: 'attiva', salonId, piano, mesi, nota }); },
   togli: async (salonId: string): Promise<void> => { await chiamaAdmin({ azione: 'togli', salonId }); }
 };
+
+/**
+ * Il conto SMS del salone (Skebby): il salone lo collega una volta, compra lì
+ * i suoi crediti, e i messaggi partono dal suo conto. Utente e password li
+ * custodisce il server: al browser torna solo se è collegato e quanti SMS restano.
+ */
+export interface StatoSms {
+  /** Gli SMS possono partire adesso. */
+  attivi: boolean;
+  motivo: string;
+  /** Il salone ha collegato il suo conto. */
+  collegato: boolean;
+  utente: string;
+  mittente: string;
+  crediti: number | null;
+  /** Il conto è collegato ma non risponde più (password cambiata…). */
+  problema: string;
+}
+const chiamaMessaggi = async (corpo: any) => {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+  const risposta = await fetch('/api/messaggi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(corpo)
+  });
+  const dati = await risposta.json().catch(() => ({}));
+  if (!risposta.ok) throw new Error(dati?.errore || `Il server non ha risposto (errore ${risposta.status}).`);
+  return dati;
+};
+export const smsApi = {
+  stato: async (): Promise<StatoSms> => chiamaMessaggi({ azione: 'sms_stato' }),
+  collega: async (utente: string, password: string, mittente: string): Promise<{ crediti: number | null }> =>
+    chiamaMessaggi({ azione: 'sms_collega', utente, password, mittente }),
+  scollega: async (): Promise<void> => { await chiamaMessaggi({ azione: 'sms_scollega' }); }
+};

@@ -87,6 +87,16 @@ service cloud.firestore {
              || abbonamento(userId).fino_al > request.time );
     }
 
+    /**
+     * Il salone può lavorare: è in prova, o ha un piano valido (uno
+     * qualsiasi). A prova finita senza piano non si creano né si cambiano
+     * appuntamenti e clienti; leggere e cancellare resta possibile, così i
+     * dati si possono sempre scaricare.
+     */
+    function haAccesso(userId) {
+      return inProva(userId) || abbonamentoValido(userId);
+    }
+
     /** Il salone può usare le funzioni del piano Pro (buoni, prodotti…). */
     function haPro(userId) {
       return inProva(userId)
@@ -199,8 +209,10 @@ service cloud.firestore {
       // scrivendo direttamente qui.
       allow create: if isValidId(appuntamentoId)
                     && isValidAppuntamento(incoming())
-                    && nelSaloneCon(incoming().userId, 'agenda');
-      allow update: if isValidId(appuntamentoId) && isValidAppuntamento(incoming()) && nelSaloneCon(resource.data.userId, 'agenda');
+                    && nelSaloneCon(incoming().userId, 'agenda')
+                    && haAccesso(incoming().userId);
+      allow update: if isValidId(appuntamentoId) && isValidAppuntamento(incoming()) && nelSaloneCon(resource.data.userId, 'agenda')
+                    && haAccesso(resource.data.userId);
       allow delete: if isValidId(appuntamentoId) && nelSaloneCon(resource.data.userId, 'agenda');
     }
 
@@ -222,10 +234,12 @@ service cloud.firestore {
       allow list: if nelSalone(resource.data.userId);
       allow create: if isValidId(clienteId) && isValidCliente(incoming())
                     && nelSaloneCon(incoming().userId, 'clienti')
+                    && haAccesso(incoming().userId)
                     && incoming().createdAt == request.time
                     && incoming().updatedAt == request.time;
       allow update: if isValidId(clienteId) && isValidCliente(incoming())
                     && nelSaloneCon(resource.data.userId, 'clienti')
+                    && haAccesso(resource.data.userId)
                     && incoming().createdAt == resource.data.createdAt
                     && incoming().updatedAt == request.time;
       allow delete: if isValidId(clienteId) && nelSaloneCon(resource.data.userId, 'clienti');
