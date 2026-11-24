@@ -419,10 +419,10 @@ export const buoniApi = {
 const oggiIso = new Date().toISOString();
 const giornoOggi = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
 const registro = [
-  { id: 'r1', tipo: 'promemoria_ora', cliente: 'Maria Rossi', a: '+393331234567', testo: 'RD Salon: ciao Maria, ti aspettiamo alle 17:00 con Giulia. A tra poco!', esito: 'errore', motivo: "il gettone di Traccar non è più valido: copia il nuovo Cloud token dall'app sul tablet e mettilo su Vercel (TRACCAR_SMS_TOKEN) (401).", quando: oggiIso, giorno: giornoOggi },
+  { id: 'r1', tipo: 'promemoria_ora', cliente: 'Maria Rossi', a: '+393331234567', testo: 'Salone Demo: ciao Maria, ti aspettiamo alle 17:00 con Giulia. A tra poco!', esito: 'errore', motivo: "il gettone di Traccar non è più valido: copia il nuovo Cloud token dall'app sul tablet e mettilo su Vercel (TRACCAR_SMS_TOKEN) (401).", quando: oggiIso, giorno: giornoOggi },
   { id: 'r2', tipo: 'avviso_salone', cliente: 'Salone', a: '+393470000000', testo: "Rosy: nuova richiesta online da Anna Bianchi, sab 10/10 alle 10:00 (Piega). Confermala dall'agenda.", esito: 'consegnato', quando: oggiIso, giorno: giornoOggi },
-  { id: 'r3', tipo: 'ricevuta', cliente: 'Anna Bianchi', a: '+393409876543', testo: 'RD Salon: grazie Anna! Abbiamo ricevuto la tua richiesta per sab 10/10 alle 10:00. Ti scriveremo appena sarà confermata.', esito: 'consegnato', quando: oggiIso, giorno: giornoOggi },
-  { id: 'r4', tipo: 'conferma', cliente: 'Chiara Esposito', a: '+393401112222', testo: 'RD Salon: ciao Chiara, il tuo appuntamento è confermato per lun 12/10 alle 11:00 con Rosanna. Ti aspettiamo! Per info 0775 123456', esito: 'consegnato', quando: oggiIso, giorno: giornoOggi }
+  { id: 'r3', tipo: 'ricevuta', cliente: 'Anna Bianchi', a: '+393409876543', testo: 'Salone Demo: grazie Anna! Abbiamo ricevuto la tua richiesta per sab 10/10 alle 10:00. Ti scriveremo appena sarà confermata.', esito: 'consegnato', quando: oggiIso, giorno: giornoOggi },
+  { id: 'r4', tipo: 'conferma', cliente: 'Chiara Esposito', a: '+393401112222', testo: 'Salone Demo: ciao Chiara, il tuo appuntamento è confermato per lun 12/10 alle 11:00 con Rosanna. Ti aspettiamo! Per info 0775 123456', esito: 'consegnato', quando: oggiIso, giorno: giornoOggi }
 ];
 
 export const registroSmsApi = {
@@ -473,4 +473,27 @@ export const prodottiApi = {
   movimenti: async (id: string) => eco(movimenti.filter(m => m.prodottoId === id)),
   movimentiDelMese: async () => eco(movimenti),
   delete: async (id: string) => { const i = prodotti.findIndex(p => p.id === id); if (i >= 0) prodotti.splice(i, 1); avvisaProdotti(); },
+};
+
+// L'indirizzo corto del salone, finto: resta in memoria finché la pagina è aperta.
+let indirizzoFinto: string | null = 'salone-demo';
+export const indirizzoApi = {
+  saloneDi: async (i: string) => (i === indirizzoFinto ? 'salone' : null),
+  attuale: async () => indirizzoFinto,
+  imposta: async (i: string) => {
+    await new Promise(r => setTimeout(r, 300));
+    if (i === 'rdsalon') throw new Error('Questo indirizzo è già di un altro salone: scegline un altro.');
+    indirizzoFinto = i;
+  },
+};
+
+const iscritti: any[] = [
+  { id: 's1', nome: 'Salone Demo', email: 'titolare@salone-demo.it', indirizzo: 'salone-demo', telefono: '0775 000000', iscritto_il: giorniFa(40), piano: 'fondatori', in_prova: false, giorni_prova: 0, scaduto: false, scadenza: null, nota: 'Bonifico 12/1', domande_ia_mese: 87 },
+  { id: 's2', nome: 'Hair Studio Anna', email: 'anna@esempio.it', indirizzo: 'hair-studio-anna', telefono: '', iscritto_il: giorniFa(5), piano: null, in_prova: true, giorni_prova: 9, scaduto: false, scadenza: null, nota: '', domande_ia_mese: 12 },
+  { id: 's3', nome: 'Barber Luca', email: 'luca@esempio.it', indirizzo: '', telefono: '', iscritto_il: giorniFa(20), piano: null, in_prova: false, giorni_prova: 0, scaduto: true, scadenza: null, nota: '', domande_ia_mese: 0 },
+];
+export const adminApi = {
+  saloni: async () => eco(iscritti),
+  attiva: async (id: string, piano: string, _mesi: number, nota = '') => { const s = iscritti.find(x => x.id === id); if (s) Object.assign(s, { piano, in_prova: false, scaduto: false, nota }); },
+  togli: async (id: string) => { const s = iscritti.find(x => x.id === id); if (s) Object.assign(s, { piano: null, scaduto: true }); },
 };

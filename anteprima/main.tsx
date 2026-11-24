@@ -10,6 +10,9 @@ import Layout from '../src/components/Layout';
 import RosyChat from '../src/components/RosyChat';
 import SchermataAccesso from '../src/components/SchermataAccesso';
 import { impostaSessione } from '@/lib/sessione';
+import { statoAccesso } from '@/lib/piani';
+import { ProvaFinita } from '../src/components/SchermatePiano';
+import PannelloAdmin from '@/app/(dashboard)/admin/page';
 
 import DashboardHub from '@/app/(dashboard)/hub/page';
 import RosyHub from '@/app/(dashboard)/rosie/page';
@@ -37,13 +40,19 @@ document.documentElement.classList.toggle('dark', localStorage.getItem('theme') 
 const ruolo = new URLSearchParams(location.search).get('ruolo');
 const permessiFinti = (new URLSearchParams(location.search).get('permessi') || 'agenda,clienti')
   .split(',').filter(Boolean) as any;
-// L'indirizzo del salone decide quali funzioni riservate sono accese: qui si
-// finge quello di RD Salon, altrimenti nell'anteprima i Buoni non si vedono.
-// Con ?salone=altro@esempio.it si guarda com'è il gestionale per gli altri.
-const emailSalone = new URLSearchParams(location.search).get('salone') || 'rdsalon.ceccano@gmail.com';
+// Con ?piano=base (o pro, fondatori) si guarda il gestionale con quel piano;
+// con ?prova=5 a cinque giorni dall'iscrizione; con ?prova=20 a prova finita.
+// Senza niente è tutto acceso.
+const parametriPiano = new URLSearchParams(location.search);
+const pianoFinto = parametriPiano.get('piano') as any;
+const giorniDallIscrizione = parametriPiano.get('prova');
+const accessoFinto = pianoFinto || giorniDallIscrizione
+  ? statoAccesso(new Date(Date.now() - Number(giorniDallIscrizione || 60) * 86400000), pianoFinto ? { piano: pianoFinto } : null)
+  : undefined;
+const emailSalone = 'titolare@salone-demo.it';
 impostaSessione(ruolo === 'operatrice'
-  ? { uid: 'u2', salonId: 'salone', titolare: false, nome: 'Giulia', permessi: permessiFinti, emailSalone }
-  : { uid: 'salone', salonId: 'salone', titolare: true, nome: 'Rosanna', permessi: null, emailSalone });
+  ? { uid: 'u2', salonId: 'salone', titolare: false, nome: 'Giulia', permessi: permessiFinti, emailSalone, accesso: accessoFinto, indirizzo: 'salone-demo' }
+  : { uid: 'salone', salonId: 'salone', titolare: true, nome: 'Rosanna', permessi: null, emailSalone, accesso: accessoFinto, indirizzo: 'salone-demo' });
 
 /** Solo per guardarla: la schermata di accesso senza Firebase dietro. */
 function AnteprimaAccesso() {
@@ -87,6 +96,7 @@ createRoot(document.getElementById('root')!).render(
         <Route path="/:salonId/prenota" element={<PrenotazionePubblica />} />
         <Route path="/:salonId/privacy" element={<InformativaPrivacy />} />
         <Route path="/accesso" element={<AnteprimaAccesso />} />
+        <Route path="/prova-finita" element={<ProvaFinita accesso={statoAccesso(new Date(Date.now() - 20 * 86400000), null)} titolare />} />
         {/* La chat di Rosy da sola: nell'anteprima nessuno è collegato, e il pulsante tondo non compare. */}
         <Route path="/rosy-chat" element={
           <div className="min-h-screen bg-zinc-100 flex items-center justify-center p-6">
@@ -109,6 +119,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/prodotti" element={<ProdottiPage />} />
               <Route path="/automazioni" element={<AutomazioniPage />} />
               <Route path="/buoni-spa" element={<BuoniSpa />} />
+              <Route path="/admin" element={<PannelloAdmin />} />
             </Routes>
           </Layout>
         } />

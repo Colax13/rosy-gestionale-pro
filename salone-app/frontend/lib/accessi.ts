@@ -9,7 +9,7 @@
 import { initializeApp, deleteApp, FirebaseApp } from 'firebase/app';
 import { getAuth, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, setDoc, deleteDoc, getDocs, query, collection, where, updateDoc } from 'firebase/firestore';
-import firebaseConfig from '../../../firebase-applet-config.json';
+import { firebaseConfig } from '../../../src/lib/firebase-config';
 import { db, auth } from '../../../src/lib/firebase';
 import type { ChiavePagina } from './sessione';
 

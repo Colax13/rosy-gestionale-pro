@@ -11,6 +11,7 @@ const PaginaAgenda = lazy(caricaPezzo(() => import('@/app/(dashboard)/agenda/pag
 const SettingsPage = lazy(caricaPezzo(() => import('@/app/(dashboard)/settings/page')));
 const ProdottiPage = lazy(caricaPezzo(() => import('@/app/(dashboard)/prodotti/page')));
 const AutomazioniPage = lazy(caricaPezzo(() => import('@/app/(dashboard)/automazioni/page')));
+const PannelloAdmin = lazy(caricaPezzo(() => import('@/app/(dashboard)/admin/page')));
 const BuoniSpa = lazy(caricaPezzo(() => import('@/app/(dashboard)/buoni-spa/page')));
 const DashboardHub = lazy(caricaPezzo(() => import('@/app/(dashboard)/hub/page')));
 const RosyHub = lazy(caricaPezzo(() => import('@/app/(dashboard)/rosie/page')));
@@ -20,8 +21,11 @@ import { useEffect, useState, lazy, Suspense } from 'react';
 import { caricaPezzo } from '@/lib/caricaPezzo';
 import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
 import { auth } from './lib/firebase';
-import { apriSessione, chiudiSessione, Sessione, puoAprirePercorso, primaPaginaPermessa } from '@/lib/sessione';
+import { apriSessione, chiudiSessione, impostaSessione, Sessione, puoAprirePercorso, primaPaginaPermessa } from '@/lib/sessione';
 import { Navigate } from 'react-router-dom';
+import { firebaseConfigurato } from './lib/firebase-config';
+import { eGestore } from '@/lib/funzioni';
+import { ProvaFinita, ConfigurazioneMancante } from './components/SchermatePiano';
 
 /** Traduce i codici di Firebase in qualcosa che si capisce e si può risolvere. */
 function spiegaErroreAccesso(error: any): string {
@@ -81,11 +85,18 @@ export default function App() {
         return;
       }
       try {
-        setSessione(await apriSessione(
+        let aperta = await apriSessione(
           currentUser.uid,
           currentUser.displayName || currentUser.email || 'Operatrice',
           currentUser.email
-        ));
+        );
+        // Chi gestisce Rosy non resta chiuso fuori quando finisce la prova
+        // del suo salone di prova: deve poter aprire il pannello.
+        if (aperta.accesso?.scaduto && eGestore(currentUser.email)) {
+          aperta = { ...aperta, accesso: undefined };
+          impostaSessione(aperta);
+        }
+        setSessione(aperta);
       } catch (err: any) {
         setErroreAccesso(err?.message || 'Non sono riuscito ad aprire la sessione.');
         await signOut(auth);
@@ -150,6 +161,9 @@ export default function App() {
     );
   }
 
+  // Senza le chiavi del database non si può nemmeno entrare: lo si dice.
+  if (!firebaseConfigurato) return <ConfigurazioneMancante />;
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white flex-col gap-4">
@@ -182,6 +196,11 @@ export default function App() {
     return <Onboarding user={user} onComplete={() => setOnboardingComplete(true)} />;
   }
 
+  // Prova finita senza un piano: ci si ferma qui. I dati restano.
+  if (sessione?.accesso?.scaduto) {
+    return <ProvaFinita accesso={sessione.accesso} titolare={sessione.titolare} />;
+  }
+
   // Una pagina che non le è concessa non si apre nemmeno scrivendola a mano
   // nell'indirizzo: si torna alla prima che può vedere. Il muro vero sono le
   // regole del database, questo serve a non far vedere pagine vuote.
@@ -207,6 +226,8 @@ export default function App() {
           <Route path="/prodotti" element={<Protetta percorso="/prodotti"><ProdottiPage /></Protetta>} />
           <Route path="/automazioni" element={<Protetta percorso="/automazioni"><AutomazioniPage /></Protetta>} />
           <Route path="/buoni-spa" element={<Protetta percorso="/buoni-spa"><BuoniSpa /></Protetta>} />
+          {/* Il pannello di chi gestisce Rosy: il server fa entrare solo gli indirizzi in ADMIN_EMAILS. */}
+          <Route path="/admin" element={<PannelloAdmin />} />
         </Routes>
         </Suspense>
       </Layout>

@@ -20,6 +20,10 @@
   ],
   "rewrites": [
     {
+      "source": "/:indirizzo((?!agenda$|clienti$|catalogo$|report$|dipendenti$|settings$|prodotti$|automazioni$|buoni-spa$|buoni$|rosy$|rosie$|hub$|admin$|api$|assets$|icone$|accesso$|login$|prenota$|privacy$|termini$|prezzi$|piani$|demo$|anteprima$|www$|app$|help$|aiuto$|index$|manifest$|favicon$|robots$|sitemap$|rosy-chat$)[a-z0-9][a-z0-9-]{1,38}[a-z0-9])",
+      "destination": "/api/pagina?indirizzo=:indirizzo"
+    },
+    {
       "source": "/((?!api/|assets/).*)",
       "destination": "/index.html"
     }

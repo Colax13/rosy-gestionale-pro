@@ -13,7 +13,7 @@
 
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../src/lib/firebase';
-import { funzioneAccesa } from './funzioni';
+import { Accesso, Abbonamento, statoAccesso, paginaNelPiano } from './piani';
 
 /** Le pagine su cui si può dare o togliere l'accesso. */
 export const PAGINE = [
@@ -41,8 +41,8 @@ export const PAGINE_CONCEDIBILI = PAGINE.filter(p => !('soloTitolare' in p && p.
  * gestionale non esiste.
  */
 export function pagineConcedibili() {
-  const email = corrente?.emailSalone;
-  return PAGINE_CONCEDIBILI.filter(p => funzioneAccesa(p.chiave, email));
+  const livello = accessoCorrente().livello;
+  return PAGINE_CONCEDIBILI.filter(p => paginaNelPiano(p.chiave, livello));
 }
 
 export type ChiavePagina = typeof PAGINE[number]['chiave'];
@@ -85,24 +85,56 @@ export interface Sessione {
    * titolare e per chi lavora con lui, che deve vedere le stesse pagine.
    */
   emailSalone: string | null;
+  /**
+   * Prova gratuita, piano e che cosa si può usare. Vale per tutto il salone:
+   * l'operatrice ha lo stesso piano della titolare. Assente (anteprima,
+   * prove) = tutto acceso.
+   */
+  accesso?: Accesso;
+  /** L'indirizzo corto del salone ("rdsalon"), se l'ha scelto. */
+  indirizzo?: string | null;
 }
 
 let corrente: Sessione | null = null;
 
+const TUTTO_ACCESO: Accesso = { livello: 'pro', piano: null, inProva: false, giorniProva: 0, scaduto: false, scadenza: null };
+
+/** Che cosa può usare il salone di chi è entrato. */
+export function accessoCorrente(): Accesso {
+  return corrente?.accesso || TUTTO_ACCESO;
+}
+
+/** Cambia l'indirizzo corto ricordato nella sessione (dopo averlo salvato). */
+export function ricordaIndirizzo(indirizzo: string | null) {
+  if (corrente) corrente = { ...corrente, indirizzo };
+}
+
 /**
- * L'indirizzo del titolare di quel salone, letto dalla sua scheda.
- * Se la scheda non c'è o non si legge si risponde "non lo so" (null): le
- * funzioni riservate restano spente, che è il modo giusto di sbagliare.
+ * La scheda del salone e il suo abbonamento, letti una volta all'accesso.
+ * Se qualcosa non si legge si lascia lavorare (vedi `statoAccesso`).
  */
-async function emailDelTitolare(salonId: string): Promise<string | null> {
+async function leggiSalone(salonId: string): Promise<{ email: string | null; accesso: Accesso; indirizzo: string | null }> {
+  let scheda: any = null, abbonamento: Abbonamento | null = null;
   try {
-    const salone = await getDoc(doc(db, 'salons', salonId));
-    return salone.exists() ? ((salone.data() as any).ownerEmail || null) : null;
+    const s = await getDoc(doc(db, 'salons', salonId));
+    scheda = s.exists() ? s.data() : null;
   } catch (err) {
     console.warn('Non sono riuscito a leggere la scheda del salone.', err);
-    return null;
   }
+  try {
+    const a = await getDoc(doc(db, 'abbonamenti', salonId));
+    abbonamento = a.exists() ? (a.data() as Abbonamento) : null;
+  } catch (err) {
+    console.warn('Non sono riuscito a leggere l\'abbonamento.', err);
+  }
+  return {
+    email: scheda?.ownerEmail || null,
+    // Un salone senza scheda è appena nato: la prova parte adesso.
+    accesso: statoAccesso(scheda ? scheda.createdAt : new Date(), abbonamento),
+    indirizzo: scheda?.indirizzo || null
+  };
 }
+
 
 /**
  * Capisce in che salone è entrata questa persona.
@@ -131,7 +163,7 @@ export async function apriSessione(uid: string, nome: string, emailAccesso?: str
           // Chi lavora nel salone entra con il proprio indirizzo, che non dice
           // niente su quali funzioni ha quel salone: l'indirizzo che conta è
           // quello del titolare, scritto nella scheda del salone.
-          emailSalone: await emailDelTitolare(dati.salonId)
+          emailSalone: null
         };
       }
     }
@@ -141,6 +173,14 @@ export async function apriSessione(uid: string, nome: string, emailAccesso?: str
     if (err?.message?.includes('sospeso')) throw err;
     console.warn('Non sono riuscito a leggere il profilo: proseguo come titolare.', err);
   }
+
+  const salone = await leggiSalone(sessione.salonId);
+  sessione = {
+    ...sessione,
+    emailSalone: sessione.titolare ? (sessione.emailSalone || salone.email) : (salone.email || sessione.emailSalone),
+    accesso: salone.accesso,
+    indirizzo: salone.indirizzo
+  };
 
   corrente = sessione;
   return sessione;
@@ -175,7 +215,9 @@ export function idSalone(): string | null {
  */
 export function puoVedere(chiave: ChiavePagina): boolean {
   if (!corrente) return false;
-  if (!funzioneAccesa(chiave, corrente.emailSalone)) return false;
+  // Le impostazioni restano aperte anche a prova finita: è da lì che si
+  // scarica il backup e si sceglie il piano.
+  if (chiave !== 'impostazioni' && !paginaNelPiano(chiave, accessoCorrente().livello)) return false;
   if (corrente.permessi === null) return true;
   return corrente.permessi.includes(chiave);
 }

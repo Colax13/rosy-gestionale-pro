@@ -60,12 +60,13 @@ const durataScritta = (min: number) => {
 /** Il telefono da chiamare, ripulito per il link `tel:`. */
 const linkTelefono = (t: string) => `tel:${(t || '').replace(/[^\d+]/g, '')}`;
 
-export default function PrenotazionePubblica({ salonIdFisso }: { salonIdFisso?: string } = {}) {
+export default function PrenotazionePubblica({ salonIdFisso, privacy }: { salonIdFisso?: string; privacy?: string } = {}) {
   const parametri = useParams();
   // Su un indirizzo tutto del salone (prenota.rdsalon.com) il salone non sta
   // nel percorso: lo dice l'indirizzo.
   const salonId = salonIdFisso || parametri.salonId || '';
-  const linkPrivacy = salonIdFisso ? '/privacy' : `/${salonId}/privacy`;
+  // Dall'indirizzo corto (rosy.it/rdsalon) l'informativa la indica chi apre la pagina.
+  const linkPrivacy = privacy || (salonIdFisso ? '/privacy' : `/${salonId}/privacy`);
 
   const [salone, setSalone] = useState<Salone>({ nome: '', indirizzo: '', telefono: '', logo: '', descrizione: '', whatsapp: '' });
   const [catalogo, setCatalogo] = useState<Servizio[]>([]);

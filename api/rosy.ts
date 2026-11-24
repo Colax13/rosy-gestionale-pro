@@ -16,6 +16,7 @@ process.env.TZ = 'Europe/Rome';
 
 import { database, chiEntra, saloneDi } from './_firebase';
 import { MODELLI_GEMINI, riserve, Riserva } from './_gemini';
+import { accessoDelSalone } from './_piano';
 import { FieldValue } from 'firebase-admin/firestore';
 import { tokenDi, costoChiamata, meseDi, idConsumo, consumoVuoto, ConsumoMese } from '../salone-app/frontend/lib/consumi-ia';
 import { richiestaPerOpenAI, rispostaDaOpenAI } from './_traduttore';
@@ -355,6 +356,13 @@ export default async function handler(req: Richiesta, res: Risposta) {
   try {
     const { storia, riscalda, consumi } = richiesta;
     const salonId = await saloneDi(chi.uid);
+
+    // Rosy è del piano Pro (e della prova): il controllo vero sta qui, non
+    // nel menù del browser.
+    if (!consumi && (await accessoDelSalone(database(), salonId)).livello !== 'pro') {
+      res.status(403).json({ errore: 'Rosy fa parte del piano Pro: attivalo da "Il tuo piano".' });
+      return;
+    }
 
     // Il conto dell'IA per la pagina Impostazioni.
     if (consumi) {

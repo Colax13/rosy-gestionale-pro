@@ -47,7 +47,7 @@ export function firebase(): admin.app.App {
 
 /** Il database giusto: questo progetto non usa quello predefinito. */
 export function database() {
-  const id = process.env.FIRESTORE_DATABASE_ID || 'ai-studio-7035b199-a80f-403a-9044-0d7d6c4eb074';
+  const id = process.env.FIRESTORE_DATABASE_ID || '(default)';
   return getFirestore(firebase(), id);
 }
 

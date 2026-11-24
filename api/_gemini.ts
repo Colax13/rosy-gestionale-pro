@@ -40,7 +40,7 @@ export function riserve(): Riserva[] {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     chiave: openrouter,
     modello: (process.env.OPENROUTER_MODEL || 'openai/gpt-oss-120b:free').trim(),
-    intestazioni: { 'HTTP-Referer': 'https://rosygestionale.rdsalon.com', 'X-Title': 'Rosy gestionale' }
+    intestazioni: { 'HTTP-Referer': (process.env.APP_URL || 'https://rosy.app').trim(), 'X-Title': 'Rosy gestionale' }
   });
   return elenco;
 }

@@ -1,80 +1,73 @@
-// Funzioni riservate: pagine che stanno dentro il programma ma restano spente,
-// tranne che per i saloni a cui sono state accese.
+/// <reference types="vite/client" />
+// Funzioni che dipendono da un apparecchio o da un conto di UN salone, e che
+// quindi non si accendono con il piano ma salone per salone.
 //
-// Il gestionale è uguale per tutti. Alcune pagine però nascono su richiesta di
-// un salone preciso — i Buoni sono nati per RD Salon, con il loro foglio, i
-// loro codici, la loro piega inclusa — e agli altri saloni non servono e non
-// devono comparire.
+// Le PAGINE (Buoni, Prodotti, Report, Rosy…) non stanno più qui: si aprono in
+// base al piano del salone, vedi `piani.ts`. Qui restano solo le due cose che
+// hanno bisogno di qualcosa di fisico o di un conto esterno:
 //
-// L'interruttore è l'indirizzo email del **titolare del salone**, non di chi
-// sta guardando lo schermo: così le operatrici di quel salone vedono la pagina
-// come la vede lui, e un altro salone non la vede nemmeno se gliela nomini.
+//  - `messaggi_automatici`: gli SMS partono da un "postino" (un tablet con
+//    una SIM, o un conto Skebby) che è di un salone preciso. Acceso per il
+//    salone sbagliato, le sue clienti riceverebbero SMS dal numero di un
+//    altro salone.
+//  - `buoni_dal_foglio`: i buoni pagati online letti da un foglio Google, che
+//    è di un salone preciso.
 //
-// Questo file serve a far sparire la voce dal menù. La serratura vera sta
-// nelle regole del database (`firestore.rules`, blocco `buoni`), che fanno lo
-// stesso identico controllo: senza quelle, uno che sa scrivere l'indirizzo a
-// mano nella barra leggerebbe comunque i dati.
+// A chi sono accese lo dicono le variabili d'ambiente (indirizzi email dei
+// TITOLARI, separati da virgola), non il codice:
+//    SALONI_CON_SMS / VITE_SALONI_CON_SMS
+//    SALONI_CON_FOGLIO_BUONI / VITE_SALONI_CON_FOGLIO_BUONI
+// Senza variabili sono spente per tutti, che è il modo giusto di sbagliare.
 
-/** Le pagine che non sono per tutti. */
-export type ChiaveFunzione = 'buoni' | 'messaggi_automatici' | 'buoni_dal_foglio';
+export type ChiaveFunzione = 'messaggi_automatici' | 'buoni_dal_foglio';
 
-interface FunzioneRiservata {
-  etichetta: string;
-  /** A quali saloni è accesa, per indirizzo del titolare. */
-  saloni: string[];
-  /** Perché è riservata: si legge fra un anno e si capisce ancora. */
-  motivo: string;
-}
-
-export const FUNZIONI_RISERVATE: Record<ChiaveFunzione, FunzioneRiservata> = {
-  buoni: {
-    etichetta: 'Buoni',
-    saloni: [
-      'rdsalon.ceccano@gmail.com',
-      'danieledesimone.social@gmail.com'
-    ],
-    motivo: 'Fatta su misura per RD Salon: buoni spa venduti online, con il loro foglio e la piega inclusa.'
-  },
-  // Non è una pagina: è il permesso di far partire SMS ed email alle clienti.
-  // Il postino (il tablet in salone, o Skebby) è **di un salone solo**: senza
-  // questo controllo, un altro salone che usa il gestionale confermerebbe un
-  // appuntamento e alla sua cliente arriverebbe un SMS dal numero di RD Salon.
-  // Il foglio Google dei buoni pagati online è di RD Salon: la chiave su
-  // Vercel punta a quello. Se fosse acceso per un altro salone, i buoni delle
-  // clienti di RD Salon finirebbero nel suo registro.
-  buoni_dal_foglio: {
-    etichetta: 'Buoni letti dal foglio',
-    saloni: ['rdsalon.ceccano@gmail.com'],
-    motivo: 'Il foglio dei buoni pagati online (riempito da Make con Stripe) è di RD Salon.'
-  },
-  messaggi_automatici: {
-    etichetta: 'Messaggi automatici',
-    saloni: ['rdsalon.ceccano@gmail.com'],
-    motivo: 'Il tablet che manda gli SMS è di RD Salon: i messaggi partono solo per le sue clienti.'
-  }
+const VARIABILE: Record<ChiaveFunzione, string> = {
+  messaggi_automatici: 'SALONI_CON_SMS',
+  buoni_dal_foglio: 'SALONI_CON_FOGLIO_BUONI'
 };
+
+/** Legge una variabile sia sul server (process.env) sia nel browser (VITE_…). */
+function variabile(nome: string): string {
+  const delServer = typeof process !== 'undefined' ? process.env?.[nome] || process.env?.[`VITE_${nome}`] : '';
+  const delBrowser = (import.meta as any).env?.[`VITE_${nome}`];
+  return delServer || delBrowser || '';
+}
 
 /** True se quella chiave è una funzione riservata (e non una pagina normale). */
 export function eRiservata(chiave: string): chiave is ChiaveFunzione {
-  return Object.prototype.hasOwnProperty.call(FUNZIONI_RISERVATE, chiave);
+  return Object.prototype.hasOwnProperty.call(VARIABILE, chiave);
 }
 
 /**
- * Gli indirizzi si confrontano senza maiuscole e senza spazi attorno:
- * "Rdsalon.Ceccano@gmail.com " e quello scritto qui sopra sono la stessa casella.
+ * Gli indirizzi si confrontano senza maiuscole e senza spazi attorno.
  */
 export function normalizzaEmail(email?: string | null): string {
   return (email || '').trim().toLowerCase();
 }
 
+/** "a@x.it, B@y.it" → ['a@x.it', 'b@y.it'] */
+export function leggiElenco(testo?: string | null): string[] {
+  return (testo || '').split(/[,;\s]+/).map(normalizzaEmail).filter(Boolean);
+}
+
 /**
  * True se quella funzione è accesa per il salone di quell'indirizzo.
- * Senza indirizzo la risposta è no: una funzione riservata sta spenta finché
- * non si sa con certezza di chi è il salone.
+ * Una chiave che non è una funzione riservata è accesa per tutti. Senza
+ * indirizzo la risposta è no. `elenco` serve alle prove.
  */
-export function funzioneAccesa(chiave: string, emailSalone?: string | null): boolean {
+export function funzioneAccesa(chiave: string, emailSalone?: string | null, elenco?: string): boolean {
   if (!eRiservata(chiave)) return true;
   const email = normalizzaEmail(emailSalone);
   if (!email) return false;
-  return FUNZIONI_RISERVATE[chiave].saloni.map(normalizzaEmail).includes(email);
+  return leggiElenco(elenco ?? variabile(VARIABILE[chiave])).includes(email);
+}
+
+/**
+ * True se quell'indirizzo è di chi gestisce Rosy (ADMIN_EMAILS sul server,
+ * VITE_ADMIN_EMAILS nel browser). Nel browser serve solo a mostrare la voce
+ * del menù: chi entra davvero nel pannello lo decide il server.
+ */
+export function eGestore(email?: string | null, elenco?: string): boolean {
+  const e = normalizzaEmail(email);
+  return !!e && leggiElenco(elenco ?? variabile('ADMIN_EMAILS')).includes(e);
 }

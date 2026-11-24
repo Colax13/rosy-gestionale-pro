@@ -1,6 +1,7 @@
 import { StrictMode, Suspense, lazy } from 'react';
 import { createRoot } from 'react-dom/client';
 import { saloneDelDominio } from '@/lib/domini';
+import { sembraIndirizzo } from '@/lib/indirizzo';
 import { caricaPezzo } from '@/lib/caricaPezzo';
 import Paracadute from '@/components/Paracadute';
 import './index.css';
@@ -8,8 +9,11 @@ import './index.css';
 // Si scarica solo la parte che serve: la cliente che prenota non riceve il
 // gestionale, e chi lavora non riceve la prenotazione.
 const percorso = window.location.pathname.replace(/\/+$/, '');
+// Pubblica è anche la pagina dall'indirizzo corto del salone (rosy.it/rdsalon):
+// un solo pezzo di percorso che non è una pagina del gestionale.
 const pubblica = !!saloneDelDominio(window.location.hostname)
-  || /^\/[A-Za-z0-9_-]{1,128}\/(prenota|privacy)$/.test(percorso);
+  || /^\/[A-Za-z0-9_-]{1,128}\/(prenota|privacy)$/.test(percorso)
+  || sembraIndirizzo(percorso.slice(1));
 
 // Due import separati: scritti in un'unica espressione, Vite precaricherebbe
 // tutti e due i pezzi.

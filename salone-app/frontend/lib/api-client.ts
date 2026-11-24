@@ -7,6 +7,7 @@ import { ordinaOperatori } from './operatori';
 import { unisciConsensi } from './privacy';
 import { TipoMovimento, variazione, incassoProdotti } from './prodotti';
 import { meseDi } from './consumi-ia';
+import { indirizzoValido, erroreIndirizzo } from './indirizzo';
 import { stimaPerMese, stimaPerOperatrice } from './riepilogo';
 import { db, auth } from '../../../src/lib/firebase';
 
@@ -1188,4 +1189,83 @@ export const prodottiApi = {
   delete: async (id: string) => {
     await deleteDoc(doc(db, 'prodotti', id));
   }
+};
+
+/**
+ * L'indirizzo corto del salone (rosy.it/rdsalon). Sta in `indirizzi/{nome}`:
+ * chi arriva prima lo prende, e le regole del database non lasciano prendere
+ * quello di un altro né cambiarlo a chi non è il titolare.
+ */
+export const indirizzoApi = {
+  /** Di quale salone è quell'indirizzo. null = di nessuno. Lo legge chiunque. */
+  saloneDi: async (indirizzo: string): Promise<string | null> => {
+    if (!indirizzoValido(indirizzo)) return null;
+    const snap = await getDoc(doc(db, 'indirizzi', indirizzo));
+    return snap.exists() ? ((snap.data() as any).salonId || null) : null;
+  },
+  /** L'indirizzo che ha adesso il salone, letto dalla sua scheda. */
+  attuale: async (): Promise<string | null> => {
+    const snap = await getDoc(doc(db, 'salons', getUserId()));
+    return snap.exists() ? ((snap.data() as any).indirizzo || null) : null;
+  },
+  /**
+   * Prende quell'indirizzo per il salone e lascia quello di prima. Solo il
+   * titolare. Se è già di un altro salone dice di sceglierne un altro.
+   */
+  imposta: async (indirizzo: string): Promise<void> => {
+    const problema = erroreIndirizzo(indirizzo);
+    if (problema) throw new Error(problema);
+    const uid = auth.currentUser?.uid;
+    if (!uid || uid !== getUserId()) throw new Error('L\'indirizzo del salone lo sceglie la titolare.');
+
+    const preso = await getDoc(doc(db, 'indirizzi', indirizzo));
+    if (preso.exists()) {
+      if ((preso.data() as any).salonId === uid) {
+        await updateDoc(doc(db, 'salons', uid), { indirizzo });
+        return;
+      }
+      throw new Error('Questo indirizzo è già di un altro salone: scegline un altro.');
+    }
+
+    const schedaRef = doc(db, 'salons', uid);
+    const scheda = await getDoc(schedaRef);
+    const vecchio = scheda.exists() ? (scheda.data() as any).indirizzo : null;
+
+    const lotto = writeBatch(db);
+    lotto.set(doc(db, 'indirizzi', indirizzo), { salonId: uid, createdAt: serverTimestamp() });
+    if (vecchio && vecchio !== indirizzo) lotto.delete(doc(db, 'indirizzi', vecchio));
+    lotto.update(schedaRef, { indirizzo });
+    try {
+      await lotto.commit();
+    } catch (err: any) {
+      // Fra il controllo e il salvataggio l'ha preso qualcun altro.
+      if (err?.code === 'permission-denied') throw new Error('Questo indirizzo non è disponibile: scegline un altro.');
+      throw err;
+    }
+  }
+};
+
+/** Il pannello di chi gestisce Rosy: saloni iscritti e piani. Il server fa entrare solo gli indirizzi in ADMIN_EMAILS. */
+export interface SaloneIscritto {
+  id: string; nome: string; email: string; indirizzo: string; telefono: string;
+  iscritto_il: string | null; piano: string | null; in_prova: boolean; giorni_prova: number;
+  scaduto: boolean; scadenza: string | null; nota: string; domande_ia_mese: number;
+}
+const chiamaAdmin = async (corpo: any) => {
+  const token = await auth.currentUser?.getIdToken();
+  if (!token) throw new Error('Non risulti collegata: esci e rientra.');
+  const risposta = await fetch('/api/admin', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify(corpo)
+  });
+  const dati = await risposta.json().catch(() => ({}));
+  if (!risposta.ok) throw new Error(dati?.errore || `Il server non ha risposto (errore ${risposta.status}).`);
+  return dati;
+};
+export const adminApi = {
+  saloni: async (): Promise<SaloneIscritto[]> => (await chiamaAdmin({ azione: 'elenco' })).saloni || [],
+  /** `mesi` = 0: senza scadenza. */
+  attiva: async (salonId: string, piano: string, mesi: number, nota = ''): Promise<void> => { await chiamaAdmin({ azione: 'attiva', salonId, piano, mesi, nota }); },
+  togli: async (salonId: string): Promise<void> => { await chiamaAdmin({ azione: 'togli', salonId }); }
 };
