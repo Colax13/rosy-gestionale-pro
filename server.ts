@@ -9,10 +9,8 @@ if (!admin.apps.length) {
   // Try to initialize. In AI studio, application default credentials might not be present
   // but it's enough to verify tokens if we pass the project ID.
   try {
-    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    const firebaseConfig = require(configPath);
     admin.initializeApp({
-      projectId: firebaseConfig.projectId
+      projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID
     });
   } catch (e) {
     admin.initializeApp();

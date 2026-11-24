@@ -1,7 +1,9 @@
-// Prova delle funzioni riservate. Qui si controlla solo la maniglia (che cosa
-// si vede); la serratura è in firestore.rules e si prova sul campo.
-import { funzioneAccesa, eRiservata, normalizzaEmail } from './funzioni';
+// Prova di che cosa vede chi entra: le pagine dipendono dal piano del salone
+// e dai permessi della persona; SMS e foglio dei buoni dall'elenco dei saloni.
+// Qui si controlla solo la maniglia; la serratura è in firestore.rules.
+import { funzioneAccesa, eRiservata, normalizzaEmail, leggiElenco } from './funzioni';
 import { impostaSessione, puoVedere, puoAprirePercorso, pagineConcedibili, primaPaginaPermessa, Sessione } from './sessione';
+import { statoAccesso, Abbonamento } from './piani';
 
 let ok = 0, ko = 0;
 const check = (nome: string, atteso: any, avuto: any) => {
@@ -10,53 +12,63 @@ const check = (nome: string, atteso: any, avuto: any) => {
   uguale ? ok++ : ko++;
 };
 
-const RD = 'rdsalon.ceccano@gmail.com';
+// --- SMS e foglio: salone per salone ----------------------------------------
+const ELENCO = 'titolare@salone.it, Altro@Salone.it';
+check('gli SMS sono riservati',          true,  eRiservata('messaggi_automatici'));
+check('i buoni non più: sono del piano', false, eRiservata('buoni'));
+check('accesi per chi è in elenco',      true,  funzioneAccesa('messaggi_automatici', ' Titolare@Salone.it ', ELENCO));
+check('spenti per gli altri',            false, funzioneAccesa('messaggi_automatici', 'nuovo@salone.it', ELENCO));
+check('spenti senza elenco',             false, funzioneAccesa('messaggi_automatici', 'titolare@salone.it', ''));
+check('spenti se non si sa di chi è',    false, funzioneAccesa('messaggi_automatici', null, ELENCO));
+check('una pagina normale è per tutti',  true,  funzioneAccesa('agenda', 'chiunque@esempio.it', ''));
+check('indirizzo ripulito',              'a@b.it', normalizzaEmail(' A@B.IT '));
+check('elenco letto',                    ['a@b.it', 'c@d.it'], leggiElenco('A@b.it;  c@d.it,'));
 
-// --- l'interruttore ---------------------------------------------------------
-check('i buoni sono riservati',        true,  eRiservata('buoni'));
-check("l'agenda no",                   false, eRiservata('agenda'));
-check('accesa per RD Salon',           true,  funzioneAccesa('buoni', RD));
-check('maiuscole e spazi non contano', true,  funzioneAccesa('buoni', '  RDSalon.Ceccano@Gmail.com '));
-check('accesa anche per Daniele',      true,  funzioneAccesa('buoni', 'danieledesimone.social@gmail.com'));
-check('spenta per un altro salone',    false, funzioneAccesa('buoni', 'parrucchiere.sangiovanni@gmail.com'));
-check('spenta se non si sa di chi è',  false, funzioneAccesa('buoni', null));
-check('una pagina normale è per tutti',true,  funzioneAccesa('agenda', 'chiunque@esempio.it'));
-check('indirizzo ripulito',            'a@b.it', normalizzaEmail(' A@B.IT '));
+// --- le pagine: piano del salone e permessi della persona -------------------
+const adesso = new Date();
+const giorniFa = (n: number) => new Date(adesso.getTime() - n * 86400000);
+const con = (nato: Date, abbonamento: Abbonamento | null, permessi: any = null): Sessione => ({
+  uid: 'u', salonId: 's', titolare: permessi === null, nome: 'Rosanna', permessi, emailSalone: 't@s.it',
+  accesso: statoAccesso(nato, abbonamento, adesso)
+});
 
-// --- che cosa vede chi entra ------------------------------------------------
-const titolare = (emailSalone: string | null): Sessione =>
-  ({ uid: 's', salonId: 's', titolare: true, nome: 'Rosanna', permessi: null, emailSalone });
-const operatrice = (emailSalone: string | null, permessi: any): Sessione =>
-  ({ uid: 'u2', salonId: 's', titolare: false, nome: 'Giulia', permessi, emailSalone });
+impostaSessione(con(giorniFa(2), null));
+check('in prova: i buoni ci sono',            true, puoVedere('buoni'));
+check('in prova: i prodotti ci sono',         true, puoAprirePercorso('/prodotti'));
+check('in prova: i buoni si possono concedere', true, pagineConcedibili().some(p => p.chiave === 'buoni'));
 
-impostaSessione(titolare(RD));
-check('RD Salon: il titolare vede i buoni',     true, puoVedere('buoni'));
-check('RD Salon: la voce del menù c\'è',        true, puoAprirePercorso('/buoni-spa'));
-check('RD Salon: i buoni si possono concedere', true, pagineConcedibili().some(p => p.chiave === 'buoni'));
+impostaSessione(con(giorniFa(40), { piano: 'base' }));
+check('base: niente buoni',                   false, puoVedere('buoni'));
+check('base: voce sparita dal menù',          false, puoAprirePercorso('/buoni-spa'));
+check('base: niente report',                  false, puoAprirePercorso('/report'));
+check('base: niente da concedere',            false, pagineConcedibili().some(p => p.chiave === 'buoni'));
+check('base: l\'agenda resta',                true,  puoAprirePercorso('/agenda'));
+check('base: i clienti restano',              true,  puoAprirePercorso('/clienti'));
 
-impostaSessione(titolare('danieledesimone.social@gmail.com'));
-check('Daniele: vede i buoni',                  true, puoVedere('buoni'));
+impostaSessione(con(giorniFa(40), { piano: 'pro' }));
+check('pro: buoni, prodotti, report',         [true, true, true], [puoVedere('buoni'), puoVedere('prodotti'), puoVedere('report')]);
 
-impostaSessione(titolare('parrucchiere.sangiovanni@gmail.com'));
-check('altro salone: niente buoni',             false, puoVedere('buoni'));
-check('altro salone: voce sparita dal menù',    false, puoAprirePercorso('/buoni-spa'));
-check('altro salone: niente da concedere',      false, pagineConcedibili().some(p => p.chiave === 'buoni'));
-check('altro salone: l\'agenda resta',          true,  puoAprirePercorso('/agenda'));
+impostaSessione(con(giorniFa(40), { piano: 'fondatori' }));
+check('fondatori: come il pro',               true, puoVedere('automazioni'));
 
-impostaSessione(titolare(null));
-check('salone sconosciuto: chiuso',             false, puoVedere('buoni'));
+impostaSessione(con(giorniFa(40), null));
+check('prova finita: agenda chiusa',          false, puoAprirePercorso('/agenda'));
+check('prova finita: le impostazioni restano', true, puoAprirePercorso('/settings'));
 
-impostaSessione(operatrice(RD, ['agenda', 'buoni']));
-check('operatrice di RD con il permesso',       true,  puoVedere('buoni'));
+impostaSessione(con(giorniFa(40), { piano: 'pro' }, ['agenda', 'buoni']));
+check('operatrice con il permesso',           true,  puoVedere('buoni'));
+impostaSessione(con(giorniFa(40), { piano: 'pro' }, ['agenda']));
+check('operatrice senza il permesso',         false, puoVedere('buoni'));
 
-impostaSessione(operatrice(RD, ['agenda']));
-check('operatrice di RD senza il permesso',     false, puoVedere('buoni'));
-
-// Il permesso scritto nella sua scheda non basta: se il salone non ha la
-// funzione, la pagina non esiste per nessuno.
-impostaSessione(operatrice('parrucchiere.sangiovanni@gmail.com', ['buoni']));
-check('permesso senza funzione: chiuso',        false, puoVedere('buoni'));
+// Il permesso scritto nella sua scheda non basta: se il piano non ha la
+// pagina, non esiste per nessuno.
+impostaSessione(con(giorniFa(40), { piano: 'base' }, ['buoni']));
+check('permesso senza piano: chiuso',         false, puoVedere('buoni'));
 check('e non ci finisce nemmeno dopo l\'accesso', '/agenda', primaPaginaPermessa());
 
+// Senza informazioni sul piano (anteprima) è tutto acceso.
+impostaSessione({ uid: 'u', salonId: 's', titolare: true, nome: 'R', permessi: null, emailSalone: null });
+check('anteprima: tutto acceso',              true, puoVedere('buoni'));
+
 console.log(`\n${ok} passate, ${ko} fallite`);
-process.exit(ko ? 1 : 0);
+if (ko) process.exit(1);

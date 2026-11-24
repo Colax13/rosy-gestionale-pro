@@ -2,7 +2,10 @@ import { useState, useEffect } from 'react';
 import { User, signOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
-import { dipendentiApi } from '../../salone-app/frontend/lib/api-client';
+import { dipendentiApi, indirizzoApi } from '../../salone-app/frontend/lib/api-client';
+import { indirizzoDaNome, erroreIndirizzo } from '../../salone-app/frontend/lib/indirizzo';
+import { GIORNI_PROVA } from '../../salone-app/frontend/lib/piani';
+import { ricordaIndirizzo } from '../../salone-app/frontend/lib/sessione';
 import { LogOut, ArrowRight, ArrowLeft, Upload, Check, SkipForward } from 'lucide-react';
 
 interface OnboardingProps {
@@ -55,8 +58,23 @@ export default function Onboarding({ user, onComplete }: OnboardingProps) {
     checkUserPlan();
   }, [user, onComplete]);
 
-  const selectPlanAndFinish = async (plan: 'free' | 'base' | 'pro' | 'elite') => {
+  // L'indirizzo corto: proposto dal nome del salone finché non lo si tocca.
+  const [indirizzo, setIndirizzo] = useState('');
+  const [erroreIndirizzoSalvato, setErroreIndirizzoSalvato] = useState('');
+  useEffect(() => {
+    if (step === 4 && !indirizzo) setIndirizzo(indirizzoDaNome(salonData.nomeSalone));
+  }, [step]);
+
+  /**
+   * Chi si iscrive non sceglie un piano: parte la prova gratuita, che si
+   * conta dalla nascita della scheda del salone. Prima si prende l'indirizzo:
+   * se è già di un altro salone si resta qui a sceglierne un altro.
+   */
+  const iniziaProva = () => selectPlanAndFinish('prova');
+
+  const selectPlanAndFinish = async (plan: 'prova') => {
     setSaving(true);
+    setErroreIndirizzoSalvato('');
     try {
       const docRef = doc(db, 'salons', user.uid);
       const activeTeamMembers = teamMembers.filter(m => m.nome.trim() !== '');
@@ -77,7 +95,7 @@ export default function Onboarding({ user, onComplete }: OnboardingProps) {
           catalogo: costruzioneCatalogo
         },
         settings: {
-          marketingEnabled: plan !== 'base' && plan !== 'free'
+          marketingEnabled: true
         }
       };
 
@@ -86,6 +104,17 @@ export default function Onboarding({ user, onComplete }: OnboardingProps) {
       }
 
       await setDoc(docRef, payload, { merge: true });
+
+      if (indirizzo) {
+        try {
+          await indirizzoApi.imposta(indirizzo);
+          ricordaIndirizzo(indirizzo);
+        } catch (err: any) {
+          setErroreIndirizzoSalvato(err?.message || 'Indirizzo non disponibile.');
+          setSaving(false);
+          return;
+        }
+      }
       
       // Also save Real DB entries
       for (const member of activeTeamMembers) {
@@ -291,94 +320,51 @@ export default function Onboarding({ user, onComplete }: OnboardingProps) {
              <div className="mt-8 flex justify-between">
               <button onClick={prevStep} className="text-gray-500 px-4 py-3 hover:bg-gray-100 rounded-lg">Indietro</button>
               <button onClick={nextStep} className="bg-black text-white px-6 py-3 rounded-lg flex items-center gap-2 hover:bg-gray-800 transition-colors">
-                Vai ai piani <ArrowRight size={18} />
+                Avanti <ArrowRight size={18} />
               </button>
             </div>
           </div>
         );
-      case 4:
+      case 4: {
+        const problema = indirizzo ? erroreIndirizzo(indirizzo) : '';
         return (
-          <div className="animate-in fade-in slide-in-from-right-4 duration-500">
-            <div className="text-center mb-10">
-              <h1 className="text-3xl font-bold font-sans text-gray-900 tracking-tight mb-4">Scegli il piano per il tuo Salone</h1>
-              <p className="text-gray-500 font-sans max-w-xl mx-auto">
-                L'ultimo step. Seleziona il piano più adatto per scalare il tuo business.
-              </p>
+          <div className="animate-in fade-in slide-in-from-right-4 duration-500 bg-white rounded-2xl shadow-xl border border-gray-100 p-8">
+            <h1 className="text-2xl font-bold font-sans text-gray-900 tracking-tight mb-2">Il link per le tue clienti</h1>
+            <p className="text-gray-500 font-sans mb-6 text-sm">
+              È l'indirizzo dove prenotano online: lo metti su Instagram, su WhatsApp e sul cartello in salone. Lo puoi cambiare dopo dalle Impostazioni.
+            </p>
+
+            <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor="indirizzo-salone">Indirizzo del salone</label>
+            <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden focus-within:border-black">
+              <span className="pl-3 pr-1 text-gray-400 text-sm whitespace-nowrap">{window.location.host}/</span>
+              <input
+                id="indirizzo-salone"
+                value={indirizzo}
+                onChange={e => { setIndirizzo(e.target.value.toLowerCase().replace(/\s+/g, '-')); setErroreIndirizzoSalvato(''); }}
+                placeholder="il-tuo-salone"
+                className="flex-1 min-w-0 py-2.5 pr-3 outline-none text-sm text-gray-900"
+              />
+            </div>
+            {(problema || erroreIndirizzoSalvato) && <p className="text-xs text-red-600 mt-1.5">{erroreIndirizzoSalvato || problema}</p>}
+
+            <div className="mt-8 p-4 bg-fuchsia-50 border border-fuchsia-100 rounded-xl">
+              <p className="text-sm font-semibold text-gray-900">Prova gratuita di {GIORNI_PROVA} giorni</p>
+              <p className="text-sm text-gray-600 mt-1">Tutto acceso, senza carta di credito. Alla fine scegli tu se continuare e con quale piano.</p>
             </div>
 
-            <div className="grid md:grid-cols-3 gap-8 mb-8">
-              {/* Piano BASE */}
-              <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 flex flex-col hover:border-gray-200 transition-colors">
-                <h3 className="text-xl font-bold text-gray-900 mb-2">BASE</h3>
-                <p className="text-gray-500 text-sm mb-6 flex-grow">Gestionale completo e promemoria base contro i no-show.</p>
-                <div className="text-3xl font-bold mb-6">€29<span className="text-lg text-gray-500 font-normal">/mese</span></div>
-                <ul className="space-y-3 mb-8 text-sm text-gray-600">
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Clienti illimitati</li>
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Agenda & Storico note</li>
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Promemoria (base)</li>
-                </ul>
-                <button 
-                  onClick={() => selectPlanAndFinish('base')}
-                  disabled={saving}
-                  className="w-full bg-black text-white hover:bg-gray-800 transition-colors py-3 rounded-lg font-medium"
-                >
-                  Inizia con Base
-                </button>
-              </div>
-
-              {/* Piano PRO */}
-              <div className="bg-black rounded-2xl shadow-xl p-8 flex flex-col relative transform md:-translate-y-4">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-gray-800 text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider">Più scelto</div>
-                <h3 className="text-xl font-bold text-white mb-2">PRO</h3>
-                <p className="text-gray-300 text-sm mb-6 flex-grow">Marketing generativo e automazioni.</p>
-                <div className="text-3xl font-bold mb-6 text-white">€49<span className="text-lg text-gray-400 font-normal">/mese</span></div>
-                <ul className="space-y-3 mb-8 text-sm text-gray-300">
-                  <li className="flex items-start gap-2"><span className="text-white">✓</span> Tutto quello del Base</li>
-                  <li className="flex items-start gap-2"><span className="text-white">✓</span> Marketing generativo AI</li>
-                  <li className="flex items-start gap-2"><span className="text-white">✓</span> Recupero clienti inattivi</li>
-                </ul>
-                <button 
-                  onClick={() => selectPlanAndFinish('pro')}
-                  disabled={saving}
-                  className="w-full bg-white text-black hover:bg-gray-100 transition-colors py-3 rounded-lg font-medium"
-                >
-                  Scegli Pro
-                </button>
-              </div>
-
-              {/* Piano ELITE */}
-              <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 flex flex-col hover:border-gray-200 transition-colors">
-                <h3 className="text-xl font-bold text-gray-900 mb-2">ELITE</h3>
-                <p className="text-gray-500 text-sm mb-6 flex-grow">L'AI come copilota proattivo del tuo salone.</p>
-                <div className="text-3xl font-bold mb-6">€89<span className="text-lg text-gray-500 font-normal">/mese</span></div>
-                <ul className="space-y-3 mb-8 text-sm text-gray-600">
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Tutto quello del Pro</li>
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Copilota proattivo</li>
-                  <li className="flex items-start gap-2"><span className="text-black">✓</span> Priorità</li>
-                </ul>
-                <button 
-                  onClick={() => selectPlanAndFinish('elite')}
-                  disabled={saving}
-                  className="w-full bg-black text-white hover:bg-gray-800 transition-colors py-3 rounded-lg font-medium"
-                >
-                  Passa a Elite
-                </button>
-              </div>
-            </div>
-
-            <div className="text-center flex items-center justify-between">
-              <button onClick={prevStep} className="text-gray-500 px-4 py-2 hover:bg-gray-100 rounded-lg text-sm flex items-center gap-1"><ArrowLeft size={16} /> Indietro</button>
-              <button 
-                onClick={() => selectPlanAndFinish('free')}
-                disabled={saving}
-                className="text-sm font-medium text-gray-500 hover:text-gray-900 underline transition-colors"
+            <div className="mt-8 flex justify-between items-center">
+              <button onClick={prevStep} className="text-gray-500 px-4 py-3 hover:bg-gray-100 rounded-lg flex items-center gap-1"><ArrowLeft size={16} /> Indietro</button>
+              <button
+                onClick={iniziaProva}
+                disabled={saving || !!problema}
+                className="bg-black text-white px-6 py-3 rounded-lg flex items-center gap-2 hover:bg-gray-800 transition-colors disabled:opacity-50"
               >
-                Oppure continua con la versione di prova gratuita
+                {saving ? 'Preparo il salone…' : 'Inizia la prova gratuita'} <ArrowRight size={18} />
               </button>
-              <div className="w-20"></div> {/* Spacer for centering */}
             </div>
           </div>
         );
+      }
       default:
         return null;
     }
@@ -405,7 +391,7 @@ export default function Onboarding({ user, onComplete }: OnboardingProps) {
       </div>
 
       <div className="max-w-4xl w-full mx-auto" style={{
-        maxWidth: step === 4 ? '1000px' : '500px'
+        maxWidth: '500px'
       }}>
         {renderStepContent()}
       </div>

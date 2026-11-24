@@ -6,6 +6,7 @@
 // RD Salon aprirebbe il gestionale invece della sua pagina di prenotazione.
 
 import { database } from './_firebase';
+import { indirizzoValido } from '../salone-app/frontend/lib/indirizzo';
 
 interface Richiesta { url?: string; query?: Record<string, string | string[]> }
 interface Risposta {
@@ -18,8 +19,26 @@ const idValido = (v: any) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.t
 
 export default async function handler(req: Richiesta, res: Risposta) {
   const grezzo = req.query?.salone ?? new URL(req.url || '/', 'http://x').searchParams.get('salone');
-  const salonId = Array.isArray(grezzo) ? grezzo[0] : grezzo;
+  let salonId = Array.isArray(grezzo) ? grezzo[0] : grezzo;
+
+  // Dall'indirizzo corto (rosy.it/rdsalon) si risale al salone. Le pagine
+  // del gestionale hanno un solo pezzo di percorso anche loro: se non è
+  // l'indirizzo di un salone si risponde con il manifest del gestionale.
+  const corto = req.query?.indirizzo ?? new URL(req.url || '/', 'http://x').searchParams.get('indirizzo');
+  const indirizzo = (Array.isArray(corto) ? corto[0] : corto) || '';
+  let partenza = '';
+  if (!salonId && indirizzo) {
+    if (indirizzoValido(indirizzo)) {
+      try {
+        const doc = await database().collection('indirizzi').doc(indirizzo).get();
+        salonId = doc.exists ? (doc.data() as any)?.salonId : undefined;
+        partenza = `/${indirizzo}`;
+      } catch { /* si ripiega sul manifest del gestionale */ }
+    }
+    if (!salonId) { res.setHeader('Location', '/manifest.json'); res.status(307).json({}); return; }
+  }
   if (!idValido(salonId)) { res.status(400).json({ errore: 'Salone non indicato.' }); return; }
+  partenza = partenza || `/${salonId}/prenota`;
 
   // Il nome del salone. Se il server non lo trova si usa "Prenota": meglio
   // un'icona col nome generico che nessuna icona.
@@ -34,13 +53,13 @@ export default async function handler(req: Richiesta, res: Risposta) {
   res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=3600');
   res.status(200).json({
-    id: `/${salonId}/prenota`,
+    id: partenza,
     name: nome ? `${nome} · Prenota` : 'Prenota',
     short_name: (nome || 'Prenota').slice(0, 12),
     description: nome ? `Prenota da ${nome}` : 'Prenota il tuo appuntamento',
     lang: 'it',
-    start_url: `/${salonId}/prenota`,
-    scope: `/${salonId}/`,
+    start_url: partenza,
+    scope: partenza.endsWith('/prenota') ? `/${salonId}/` : partenza,
     display: 'standalone',
     orientation: 'portrait',
     background_color: '#fafafa',

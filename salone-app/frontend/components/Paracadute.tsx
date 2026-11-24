@@ -14,6 +14,7 @@ import { Component, ErrorInfo, ReactNode, useEffect, useState } from 'react';
 import { AlertTriangle, RefreshCw, CalendarDays, LifeBuoy, Copy, Check } from 'lucide-react';
 import { urlRiserva, ePaginaPubblica, indirizzoSullaRiserva, segnaProblema } from '@/lib/riserva';
 import { saloneDelDominio } from '@/lib/domini';
+import { sembraIndirizzo } from '@/lib/indirizzo';
 
 type Livello = 'riquadro' | 'pagina' | 'programma';
 
@@ -83,7 +84,8 @@ function SchermataGuasto({ livello, errore, pila, onRiprova }: { livello: Livell
   const percorso = window.location.pathname;
   // La cliente che prenota (anche dall'indirizzo tutto del salone) non va mai
   // mandata sul gestionale di riserva.
-  const pubblica = ePaginaPubblica(percorso) || !!saloneDelDominio(window.location.hostname);
+  const pubblica = ePaginaPubblica(percorso) || !!saloneDelDominio(window.location.hostname)
+    || sembraIndirizzo((percorso || window.location.pathname).replace(/^\/+|\/+$/g, ''));
   const riserva = pubblica ? null : urlRiserva();
   const versoRiserva = riserva ? indirizzoSullaRiserva(riserva, percorso) : null;
   const [copiato, setCopiato] = useState(false);

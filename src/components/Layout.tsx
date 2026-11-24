@@ -11,8 +11,12 @@ import { EVENTO_APRI_CHAT } from './RosySidebar';
 import RosyChat from './RosyChat';
 import RosyLogo from './RosyLogo';
 import BottoneMenu, { MenuSchermoContext } from './BottoneMenu';
-import { linkPrenotazione } from '@/lib/domini';
-import { puoAprirePercorso, sessioneCorrente, idSalone } from '@/lib/sessione';
+import { linkCorto } from '@/lib/indirizzo';
+import { puoAprirePercorso, sessioneCorrente, idSalone, accessoCorrente } from '@/lib/sessione';
+import { etichettaAccesso } from '@/lib/piani';
+import { IlTuoPiano } from './SchermatePiano';
+import { eGestore } from '@/lib/funzioni';
+import { ShieldCheck } from 'lucide-react';
 import Paracadute from '@/components/Paracadute';
 import { urlPrincipale } from '@/lib/riserva';
 
@@ -150,12 +154,17 @@ export default function Layout({ children }: { children: ReactNode }) {
           <div className="absolute bottom-full left-4 mb-2 w-56 bg-zinc-100 border border-zinc-300 rounded-lg shadow-xl py-2 z-50">
             <div className="px-4 py-2 border-b border-zinc-300 mb-1">
               <p className="text-sm font-medium text-zinc-900">{auth.currentUser?.email || 'admin@salone.it'}</p>
-              <p className="text-xs text-zinc-500">Piano Free</p>
+              <p className="text-xs text-zinc-500">{etichettaAccesso(accessoCorrente())}</p>
             </div>
             <button onClick={() => { setIsUserMenuOpen(false); navigate('/settings'); }} className="w-full text-left px-4 py-2 text-sm text-zinc-700 hover:bg-white hover:text-zinc-900 flex items-center gap-2">
               <Settings size={16} /> Impostazioni</button>
+            {eGestore(auth.currentUser?.email) && (
+              <button onClick={() => { setIsUserMenuOpen(false); navigate('/admin'); }} className="w-full text-left px-4 py-2 text-sm text-zinc-700 hover:bg-white hover:text-zinc-900 flex items-center gap-2">
+                <ShieldCheck size={16} /> Saloni iscritti
+              </button>
+            )}
             <button onClick={() => { setIsUserMenuOpen(false); setIsSubscriptionModalOpen(true); }} className="w-full text-left px-4 py-2 text-sm text-zinc-700 hover:bg-white hover:text-zinc-900 flex items-center gap-2">
-              <CreditCard size={16} /> Aggiorna il piano
+              <CreditCard size={16} /> Il tuo piano
             </button>
             <button onClick={toggleTheme} className="w-full text-left px-4 py-2 text-sm text-zinc-700 hover:bg-white hover:text-zinc-900 flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">
@@ -280,7 +289,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 // un'operatrice che lo condivide deve mandare lo stesso indirizzo.
                 const idPerLink = idSalone() || auth.currentUser?.uid;
                 if (idPerLink) {
-                   const link = linkPrenotazione(idPerLink, window.location.origin);
+                   const link = linkCorto(window.location.origin, sessioneCorrente()?.indirizzo, idPerLink);
                    navigator.clipboard.writeText(link);
                    const btn = document.getElementById('share-btn-text');
                    if (btn) {
@@ -317,26 +326,12 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* Subscription Modal */}
       {isSubscriptionModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
-          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white border border-zinc-200 rounded-2xl w-full max-w-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
             <div className="p-6 text-center border-b border-zinc-200 bg-zinc-50/50">
                <h2 className="text-xl font-bold text-zinc-900 font-playfair">Il tuo Piano</h2>
             </div>
-            <div className="p-6 flex flex-col gap-4">
-               <div className="bg-white border border-fuchsia-500/30 rounded-xl p-5 relative overflow-hidden">
-                 <div className="absolute top-0 right-0 bg-fuchsia-600 text-white text-[10px] font-bold px-2 py-1 select-none pointer-events-none rounded-bl-lg">ATTUALE</div>
-                 <h3 className="text-lg font-bold text-zinc-900 flex items-center gap-2 tracking-tight">Piano Free</h3>
-                 <p className="text-sm text-zinc-500 mt-2 mb-4 leading-relaxed">Perfetto per iniziare a gestire i tuoi appuntamenti con funzionalità base.</p>
-                 <div className="text-2xl font-bold text-zinc-900">€0<span className="text-sm font-normal text-zinc-500">/mese</span></div>
-               </div>
-               
-               <div className="mt-4 pt-4 border-t border-zinc-200">
-                 <h4 className="font-semibold text-zinc-800 mb-2">Funzionalità PRO (Prossimamente)</h4>
-                 <ul className="text-sm text-zinc-500 space-y-2">
-                   <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" /> Promemoria WhatsApp</li>
-                   <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" /> App per i dipendenti</li>
-                   <li className="flex items-center gap-2"><div className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" /> Analisi avanzate</li>
-                 </ul>
-               </div>
+            <div className="p-6">
+              <IlTuoPiano accesso={accessoCorrente()} />
             </div>
             <div className="p-4 bg-zinc-50/50 border-t border-zinc-200 flex justify-end">
               <button 

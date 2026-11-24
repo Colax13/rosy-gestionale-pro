@@ -18,6 +18,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { database } from './_firebase';
+import { accessoDelSalone } from './_piano';
 import { mandaSms, postinoSms } from './_messaggi';
 import { schedaSalone, mandaPerAppuntamento, mandaAvvisoSalone, registra } from './_invio';
 import {
@@ -201,6 +202,13 @@ export default async function handler(req: Richiesta, res: Risposta) {
   try {
     const { azione, salonId, telefono, appuntamento, codice, senzaCodice } = corpo(req);
     if (!idValido(salonId)) { res.status(400).json({ errore: 'Salone non riconosciuto.' }); return; }
+
+    // Un salone con la prova finita e senza piano non prende prenotazioni
+    // online: finirebbero in un'agenda che nessuno può aprire.
+    if ((await accessoDelSalone(database(), salonId)).scaduto) {
+      res.status(403).json({ errore: 'Le prenotazioni online di questo salone sono in pausa: contatta il salone per prenotare.' });
+      return;
+    }
 
     if (azione === 'codice') { await mandaCodice(salonId, String(telefono || ''), res); return; }
     if (azione === 'prenota') { await prenota(salonId, appuntamento, String(codice || ''), senzaCodice === true, res); return; }

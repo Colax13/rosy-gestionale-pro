@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { initializeFirestore } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { firebaseConfig, firestoreDatabaseId } from './firebase-config';
 
 const app = initializeApp(firebaseConfig);
 
@@ -10,7 +10,7 @@ const app = initializeApp(firebaseConfig);
 export const db = initializeFirestore(
   app,
   { ignoreUndefinedProperties: true },
-  firebaseConfig.firestoreDatabaseId
+  firestoreDatabaseId
 );
 
 export const auth = getAuth(app);

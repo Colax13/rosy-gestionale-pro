@@ -16,6 +16,9 @@
       (function() {
         var m = location.pathname.match(/^\/([A-Za-z0-9_-]{1,128})\/prenota\/?$/);
         if (m) document.querySelector('link[rel="manifest"]').href = '/api/manifest?salone=' + m[1];
+        // Lo stesso per l'indirizzo corto del salone (rosy.it/rdsalon).
+        var c = location.pathname.match(/^\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/?$/);
+        if (c) document.querySelector('link[rel="manifest"]').href = '/api/manifest?indirizzo=' + c[1];
       })();
     </script>
     <script>
