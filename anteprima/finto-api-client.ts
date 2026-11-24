@@ -48,7 +48,7 @@ const giorniFa = (n: number) => {
 
 const clienti = [
   { id: 'c1', nome: 'Maria Antonietta', cognome: 'Della Valle Guerrieri', telefono: '3401112233', email: 'maria@example.it', consenso_marketing: true, note: 'Preferisce il pomeriggio', createdAt: giorniFa(400), canale_acquisizione: 'Passaparola' },
-  { id: 'c2', nome: 'Anna',   cognome: 'Bianchi',  telefono: '3402223344', email: 'anna@example.it', createdAt: giorniFa(3), canale_acquisizione: 'Instagram' },
+  { id: 'c2', nome: 'Anna',   cognome: 'Bianchi',  telefono: '3402223344', data_nascita: `1988-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`, email: 'anna@example.it', createdAt: giorniFa(3), canale_acquisizione: 'Instagram' },
   { id: 'c3', nome: 'Chiara', cognome: 'Esposito', telefono: '3403334455', createdAt: giorniFa(220), canale_acquisizione: 'Passaparola' },
   { id: 'c4', nome: 'Federica', cognome: 'Lombardi Santangelo', telefono: '3404445566', createdAt: giorniFa(150) },
   { id: 'c5', nome: 'Rita',   cognome: 'Marchetti', telefono: '3405556677', consensi: { marketing: true }, createdAt: giorniFa(500) },
