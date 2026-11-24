@@ -37,8 +37,10 @@ interface Messaggio {
 
 const SUGGERIMENTI = [
   'Chi ho in agenda domani?',
-  'Orari liberi sabato per una piega',
-  "Quand'è venuta l'ultima volta Maria Rossi?"
+  'Quanto ho incassato questa settimana?',
+  'Chi devo richiamare?',
+  'Cosa devo riordinare?',
+  'Orari liberi sabato per una piega'
 ];
 
 /** Gemini scrive in markdown: qui basta togliere gli asterischi e tenere gli elenchi. */
@@ -48,14 +50,23 @@ const pulisci = (t: string) => t
   .replace(/^#+\s*/gm, '')
   .trim();
 
-export default function RosyChat({ onChiudi, domandaIniziale }: { onChiudi?: () => void; domandaIniziale?: string } = {}) {
+interface PropsChat {
+  onChiudi?: () => void;
+  domandaIniziale?: string;
+  /** Dentro la pagina di Rosy (non nel riquadro a comparsa): senza intestazione. */
+  inPagina?: boolean;
+  /** Una domanda fatta da fuori (un pulsante della pagina): cambia `n` per mandarla. */
+  chiedi?: { testo: string; n: number };
+}
+
+export default function RosyChat({ onChiudi, domandaIniziale, inPagina, chiedi }: PropsChat = {}) {
   const navigate = useNavigate();
   const nome = auth.currentUser?.displayName?.split(' ')[0] || '';
   const [messaggi, setMessaggi] = useState<Messaggio[]>([{
     id: 1,
     ruolo: 'rosy',
     saluto: true,
-    testo: `Ciao${nome ? ` ${nome}` : ''}! Sono Rosy. Posso dirti chi hai in agenda, cercare una cliente, trovarti un orario libero e prepararti un appuntamento da confermare.`
+    testo: `Ciao${nome ? ` ${nome}` : ''}! Sono Rosy. Posso dirti chi hai in agenda, quanto hai incassato, chi richiamare e cosa riordinare, e prepararti un appuntamento da confermare.`
   }]);
   const [testo, setTesto] = useState('');
   const [penso, setPenso] = useState(false);
@@ -70,9 +81,17 @@ export default function RosyChat({ onChiudi, domandaIniziale }: { onChiudi?: () 
     else rosyApi.riscalda();
   }, []);
 
+  // Si scorre il riquadro dei messaggi, non la pagina: dentro la pagina di
+  // Rosy `scrollIntoView` trascinerebbe giù tutto lo schermo a ogni risposta.
+  const elenco = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    fondo.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    elenco.current?.scrollTo({ top: elenco.current.scrollHeight, behavior: 'smooth' });
   }, [messaggi, penso]);
+
+  // La domanda arrivata da un pulsante della pagina.
+  useEffect(() => {
+    if (chiedi?.n) manda(chiedi.testo);
+  }, [chiedi?.n]);
 
   const manda = async (domanda?: string) => {
     const t = (domanda ?? testo).trim();
@@ -137,11 +156,13 @@ export default function RosyChat({ onChiudi, domandaIniziale }: { onChiudi?: () 
 
   return (
     <div className="flex flex-col h-full bg-transparent text-zinc-900 relative">
-      <div className="flex-1 overflow-y-auto w-full scrollbar-none p-6 pb-4 flex flex-col gap-4">
-        <div className="flex flex-col mb-2 bg-zinc-100/80 p-4 rounded-xl border border-zinc-200 pr-12">
-          <h3 className="text-zinc-900 font-semibold mb-1">Rosy</h3>
-          <p className="text-zinc-500 text-sm">Di cosa ha bisogno il tuo salone oggi?</p>
-        </div>
+      <div ref={elenco} className="flex-1 overflow-y-auto w-full scrollbar-none p-6 pb-4 flex flex-col gap-4">
+        {!inPagina && (
+          <div className="flex flex-col mb-2 bg-zinc-100/80 p-4 rounded-xl border border-zinc-200 pr-12">
+            <h3 className="text-zinc-900 font-semibold mb-1">Rosy</h3>
+            <p className="text-zinc-500 text-sm">Di cosa ha bisogno il tuo salone oggi?</p>
+          </div>
+        )}
 
         {messaggi.map(m => (
           <motion.div
@@ -267,7 +288,7 @@ export default function RosyChat({ onChiudi, domandaIniziale }: { onChiudi?: () 
         <div ref={fondo} />
       </div>
 
-      <div className="p-4 bg-zinc-50/90 backdrop-blur-md border-t border-zinc-200 mt-auto sticky bottom-0 rounded-b-3xl">
+      <div className="p-4 bg-zinc-50/90 backdrop-blur-md border-t border-zinc-200 mt-auto rounded-b-3xl">
         <div className="relative flex items-center">
           <input
             type="text"
